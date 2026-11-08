@@ -18,7 +18,10 @@ import {
   X,
   ExternalLink,
   Edit3,
+  Upload,
+  Loader2,
 } from "lucide-react";
+import { uploadProductImage } from "@/lib/storage";
 
 interface ProductItem {
   id: string;
@@ -60,6 +63,7 @@ export default function VendorProductsPage() {
   const [newDescription, setNewDescription] = React.useState("");
   const [isCreating, setIsCreating] = React.useState(false);
   const [createMessage, setCreateMessage] = React.useState<string | null>(null);
+  const [isUploadingNew, setIsUploadingNew] = React.useState(false);
 
   // Edit Product Modal State
   const [editingProduct, setEditingProduct] = React.useState<ProductItem | null>(null);
@@ -72,6 +76,26 @@ export default function VendorProductsPage() {
   const [editDescription, setEditDescription] = React.useState("");
   const [isSavingEdit, setIsSavingEdit] = React.useState(false);
   const [editMessage, setEditMessage] = React.useState<string | null>(null);
+  const [isUploadingEdit, setIsUploadingEdit] = React.useState(false);
+
+  const handleUploadImage = async (file: File, isEdit: boolean) => {
+    try {
+      if (isEdit) setIsUploadingEdit(true);
+      else setIsUploadingNew(true);
+
+      const url = await uploadProductImage(file);
+      if (isEdit) {
+        setEditImageUrl(url);
+      } else {
+        setNewImageUrl(url);
+      }
+    } catch (err: any) {
+      alert(err.message || "Failed to upload image.");
+    } finally {
+      if (isEdit) setIsUploadingEdit(false);
+      else setIsUploadingNew(false);
+    }
+  };
 
   const openEditModal = (p: ProductItem) => {
     setEditingProduct(p);
@@ -359,14 +383,39 @@ export default function VendorProductsPage() {
 
               <div>
                 <label className="text-xs font-semibold text-neutral-700 block mb-1">
-                  Photo URL (Firebase Storage / CDN)
+                  Product Photo (100% Free Cloud Upload)
                 </label>
-                <Input
-                  value={newImageUrl}
-                  onChange={(e) => setNewImageUrl(e.target.value)}
-                  placeholder="https://... (or leave empty for default)"
-                  className="h-10 text-xs rounded-xl"
-                />
+                <div className="flex gap-2 items-center">
+                  <Input
+                    value={newImageUrl}
+                    onChange={(e) => setNewImageUrl(e.target.value)}
+                    placeholder="https://... (or choose a file from device)"
+                    className="h-10 text-xs rounded-xl flex-1"
+                  />
+                  <label className="cursor-pointer inline-flex items-center gap-1.5 px-3 h-10 rounded-xl border border-neutral-200 bg-neutral-50 hover:bg-rose-50 hover:border-rose-200 text-neutral-700 text-xs font-semibold shrink-0 transition-colors">
+                    {isUploadingNew ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-rose-800" />
+                    ) : (
+                      <Upload className="w-4 h-4 text-rose-800" />
+                    )}
+                    <span>{isUploadingNew ? "Uploading..." : "Upload"}</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      disabled={isUploadingNew}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleUploadImage(file, false);
+                      }}
+                    />
+                  </label>
+                </div>
+                {newImageUrl && (
+                  <span className="text-[10px] text-emerald-600 mt-1 block">
+                    ✓ Photo uploaded and ready
+                  </span>
+                )}
               </div>
             </div>
 
@@ -644,15 +693,33 @@ export default function VendorProductsPage() {
 
                 <div>
                   <label className="text-xs font-semibold text-neutral-700 block mb-1">
-                    Image / Photo URL
+                    Image / Photo (100% Free Cloud Upload)
                   </label>
-                  <div className="flex gap-3 items-center">
+                  <div className="flex gap-2 items-center">
                     <Input
                       value={editImageUrl}
                       onChange={(e) => setEditImageUrl(e.target.value)}
-                      placeholder="https://... (Firebase Storage / CDN URL)"
+                      placeholder="https://... (or choose a photo from device)"
                       className="h-10 text-xs rounded-xl flex-1"
                     />
+                    <label className="cursor-pointer inline-flex items-center gap-1.5 px-3 h-10 rounded-xl border border-neutral-200 bg-neutral-50 hover:bg-rose-50 hover:border-rose-200 text-neutral-700 text-xs font-semibold shrink-0 transition-colors">
+                      {isUploadingEdit ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-rose-800" />
+                      ) : (
+                        <Upload className="w-4 h-4 text-rose-800" />
+                      )}
+                      <span>{isUploadingEdit ? "Uploading..." : "Upload"}</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        disabled={isUploadingEdit}
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) handleUploadImage(file, true);
+                        }}
+                      />
+                    </label>
                     {editImageUrl && (
                       <div className="relative w-10 h-10 rounded-lg overflow-hidden bg-neutral-100 shrink-0 border border-neutral-200">
                         <img
@@ -668,7 +735,7 @@ export default function VendorProductsPage() {
                     )}
                   </div>
                   <span className="text-[10px] text-neutral-400 mt-0.5 block">
-                    Paste any public image link (Firebase Storage, Cloudinary, Imgur, or direct CDN)
+                    Upload photos directly from your phone/PC or paste any web link.
                   </span>
                 </div>
 
