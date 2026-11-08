@@ -62,6 +62,9 @@ export async function GET(request: NextRequest) {
             shippingZone: addr.zone || "LOCAL",
             trackingNumber: o.trackingNumber,
             courierName: o.courierPartner,
+            paymentMethod: (o as any).paymentMethod || "DIRECT_UPI",
+            upiUtrNumber: (o as any).upiUtrNumber || null,
+            upiScreenshotUrl: (o as any).upiScreenshotUrl || null,
             createdAt: o.createdAt,
             customer: {
               fullName: addr.fullName || "Customer",
@@ -98,6 +101,46 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({
         orders: [
           {
+            id: "ord_demo_0",
+            orderNumber: "TBC-202611-1050",
+            status: "PENDING_PAYMENT",
+            totalAmount: 398,
+            subtotal: 349,
+            shippingFee: 49,
+            totalWeightGrams: 90,
+            shippingZone: "WITHIN_STATE",
+            trackingNumber: null,
+            courierName: null,
+            paymentMethod: "DIRECT_UPI",
+            upiUtrNumber: "431289567012",
+            upiScreenshotUrl: "https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=600&q=80",
+            createdAt: new Date().toISOString(),
+            customer: {
+              fullName: "Kavya Sharma",
+              phone: "9876543210",
+              email: "kavya@example.com",
+              city: "Surat",
+              state: "Gujarat",
+              pincode: "395007",
+              street: "A-501, Royal Heights, Vesu",
+              landmark: "Near University Road",
+            },
+            items: [
+              {
+                id: "item_0",
+                title: "Cloud Lamp Keychain with Light",
+                quantity: 1,
+                totalPrice: 349,
+                weightGrams: 90,
+                thumbnailUrl: "https://images.unsplash.com/photo-1535295972055-1c762f4483e5?auto=format&fit=crop&w=400&q=80",
+              },
+            ],
+            payment: {
+              status: "PENDING",
+              paymentMethod: "DIRECT_UPI",
+            },
+          },
+          {
             id: "ord_demo_1",
             orderNumber: "TBC-202611-1049",
             status: "PAID",
@@ -108,7 +151,10 @@ export async function GET(request: NextRequest) {
             shippingZone: "WITHIN_STATE",
             trackingNumber: null,
             courierName: null,
-            createdAt: new Date().toISOString(),
+            paymentMethod: "DIRECT_UPI",
+            upiUtrNumber: "431278119034",
+            upiScreenshotUrl: null,
+            createdAt: new Date(Date.now() - 3600000).toISOString(),
             customer: {
               fullName: "Simran Patel",
               phone: "9820123456",
@@ -132,7 +178,7 @@ export async function GET(request: NextRequest) {
             ],
             payment: {
               status: "CAPTURED",
-              paymentMethod: "UPI (PhonePe)",
+              paymentMethod: "DIRECT_UPI",
             },
           },
           {
@@ -146,6 +192,9 @@ export async function GET(request: NextRequest) {
             shippingZone: "ZONE_METRO",
             trackingNumber: "DEL123987456IN",
             courierName: "Delhivery",
+            paymentMethod: "DIRECT_UPI",
+            upiUtrNumber: "431267889012",
+            upiScreenshotUrl: null,
             createdAt: new Date(Date.now() - 86400000).toISOString(),
             customer: {
               fullName: "Ananya Iyer",
@@ -170,7 +219,7 @@ export async function GET(request: NextRequest) {
             ],
             payment: {
               status: "CAPTURED",
-              paymentMethod: "UPI (GPay)",
+              paymentMethod: "DIRECT_UPI",
             },
           },
         ],

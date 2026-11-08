@@ -20,6 +20,7 @@ import {
 function OrderSuccessContent() {
   const searchParams = useSearchParams();
   const orderNumber = searchParams.get("orderNumber") || "TBC-ORDER";
+  const paymentMethod = searchParams.get("paymentMethod") || "DIRECT_UPI";
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-12 text-center">
@@ -29,7 +30,7 @@ function OrderSuccessContent() {
       </div>
 
       <span className="inline-block px-3 py-1 bg-rose-50 text-rose-700 text-xs font-semibold uppercase tracking-wider rounded-full mb-3 border border-rose-200">
-        Payment Verified & Order Confirmed
+        {paymentMethod === "DIRECT_UPI" ? "Order Placed • Direct UPI Verification" : "Payment Verified & Order Confirmed"}
       </span>
 
       <h1 className="text-3xl sm:text-4xl font-serif font-bold text-neutral-900 tracking-tight">
@@ -48,7 +49,7 @@ function OrderSuccessContent() {
           </div>
           <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full text-xs font-medium self-start sm:self-auto">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            100% Prepaid via Razorpay
+            {paymentMethod === "DIRECT_UPI" ? "Direct UPI Payment" : "100% Prepaid Online"}
           </div>
         </div>
 

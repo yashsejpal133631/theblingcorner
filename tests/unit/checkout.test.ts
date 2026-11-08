@@ -104,6 +104,35 @@ describe("Module 5: Checkout & Payments Validation", () => {
     ).toBe(true);
   });
 
+  describe("Direct UPI Payment Validation", () => {
+    it("accepts valid 12-digit UPI UTR numbers", () => {
+      const payload = {
+        ...validCheckout,
+        paymentMethod: "DIRECT_UPI",
+        upiUtrNumber: "431289567012",
+        upiScreenshotUrl: "https://res.cloudinary.com/fkhfggwt/image/upload/v1/receipt.png",
+      };
+      const res = checkoutOrderSchema.safeParse(payload);
+      expect(res.success).toBe(true);
+    });
+
+    it("rejects invalid UTR numbers that are not 12 digits", () => {
+      // 10 digits
+      const invalidShort = {
+        ...validCheckout,
+        upiUtrNumber: "4312895670",
+      };
+      expect(checkoutOrderSchema.safeParse(invalidShort).success).toBe(false);
+
+      // letters in UTR
+      const invalidChars = {
+        ...validCheckout,
+        upiUtrNumber: "431289ABC012",
+      };
+      expect(checkoutOrderSchema.safeParse(invalidChars).success).toBe(false);
+    });
+  });
+
   describe("Razorpay Signature Cryptographic Verification", () => {
     const testSecret = "test_secret_key_12345";
 

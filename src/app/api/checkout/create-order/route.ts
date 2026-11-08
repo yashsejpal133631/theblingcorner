@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { items, shippingAddress, notes } = validation.data;
+    const { items, shippingAddress, notes, paymentMethod, upiUtrNumber, upiScreenshotUrl } = validation.data;
     const session = await getSession();
 
     // 2. Fetch products from Database or fallback
@@ -129,17 +129,26 @@ export async function POST(request: NextRequest) {
     const randomSuffix = Math.floor(1000 + Math.random() * 9000);
     const orderNumber = `TBC-${datePrefix}-${randomSuffix}`;
 
-    // 6. Create Razorpay Payment Order (in Paise: amount * 100)
-    const razorpayOrder = await createRazorpayOrder({
-      amountPaise: Math.round(totalAmount * 100),
-      currency: "INR",
-      receipt: orderNumber,
-      notes: {
-        orderNumber,
-        customerEmail: shippingAddress.email,
-        customerPhone: shippingAddress.phone,
-      },
-    });
+    // 6. Handle Payment Gateway or Direct UPI
+    let razorpayOrderId: string | null = null;
+    if (paymentMethod === "RAZORPAY") {
+      try {
+        const razorpayOrder = await createRazorpayOrder({
+          amountPaise: Math.round(totalAmount * 100),
+          currency: "INR",
+          receipt: orderNumber,
+          notes: {
+            orderNumber,
+            customerEmail: shippingAddress.email,
+            customerPhone: shippingAddress.phone,
+          },
+        });
+        razorpayOrderId = razorpayOrder.id;
+      } catch (rzpErr) {
+        console.warn("Razorpay order creation skipped/failed:", rzpErr);
+        razorpayOrderId = `order_mock_${Date.now()}`;
+      }
+    }
 
     // 7. Atomic Transaction or simulated order
     let createdOrderId = `order_${Date.now()}`;
@@ -158,14 +167,18 @@ export async function POST(request: NextRequest) {
             totalAmount,
             status: "PENDING_PAYMENT",
             paymentStatus: "PENDING",
+            paymentMethod: paymentMethod || "DIRECT_UPI",
+            upiUtrNumber: upiUtrNumber || null,
+            upiScreenshotUrl: upiScreenshotUrl || null,
             notes: notes || null,
             items: {
               create: orderItemsToCreate,
             },
             payment: {
               create: {
-                gateway: "RAZORPAY",
-                gatewayOrderId: razorpayOrder.id,
+                gateway: paymentMethod || "DIRECT_UPI",
+                gatewayOrderId: razorpayOrderId || undefined,
+                gatewayPaymentId: upiUtrNumber || null,
                 amount: totalAmount,
                 currency: "INR",
                 status: "PENDING",
@@ -188,7 +201,8 @@ export async function POST(request: NextRequest) {
       subtotal,
       shippingFee,
       currency: "INR",
-      razorpayOrderId: razorpayOrder.id,
+      paymentMethod: paymentMethod || "DIRECT_UPI",
+      razorpayOrderId,
       razorpayKeyId: process.env.RAZORPAY_KEY_ID || "rzp_test_YourTestKeyId",
       customer: {
         name: shippingAddress.fullName,

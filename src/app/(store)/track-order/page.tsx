@@ -229,6 +229,18 @@ function TrackOrderContent() {
               Fulfillment Journey
             </h3>
 
+            {order.status === "PENDING_PAYMENT" && (
+              <div className="mb-6 p-4 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-start gap-2.5">
+                <Clock className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+                <div>
+                  <p className="font-bold">Payment Verification In Progress</p>
+                  <p className="text-amber-800 mt-0.5">
+                    We have received your order with Direct UPI payment. The Bling Corner team is verifying the UTR in our bank account. Once confirmed, status will update to &quot;Confirmed&quot;!
+                  </p>
+                </div>
+              </div>
+            )}
+
             {order.status === "CANCELLED" ? (
               <div className="p-4 bg-red-50 text-red-700 rounded-xl text-sm font-medium">
                 This order has been cancelled and refunded.

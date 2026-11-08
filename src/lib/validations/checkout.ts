@@ -40,6 +40,14 @@ export const checkoutOrderSchema = z.object({
     )
     .min(1, { message: "Your cart is empty. Please add items to checkout." }),
   shippingAddress: shippingAddressSchema,
+  paymentMethod: z.enum(["DIRECT_UPI", "RAZORPAY"]).default("DIRECT_UPI"),
+  upiUtrNumber: z
+    .string()
+    .trim()
+    .regex(/^\d{12}$/, { message: "Please enter a valid 12-digit UPI Reference (UTR) number." })
+    .optional()
+    .or(z.literal("")),
+  upiScreenshotUrl: z.string().trim().url().optional().or(z.literal("")),
   notes: z.string().trim().max(500).optional().or(z.literal("")),
 });
 

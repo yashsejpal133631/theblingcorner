@@ -1,7 +1,6 @@
 datasource db {
   provider  = "postgresql"
   url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
 }
 
 generator client {
@@ -27,6 +26,7 @@ enum OrderStatus {
 
 enum PaymentStatus {
   PENDING
+  PENDING_VERIFICATION
   SUCCESS
   FAILED
   REFUNDED
@@ -161,6 +161,9 @@ model Order {
   
   status           OrderStatus   @default(PENDING_PAYMENT)
   paymentStatus    PaymentStatus @default(PENDING)
+  paymentMethod    String        @default("DIRECT_UPI")
+  upiUtrNumber     String?
+  upiScreenshotUrl String?
   trackingNumber   String?
   courierPartner   String?
   notes            String?       @db.Text
@@ -194,8 +197,8 @@ model Payment {
   id               String        @id @default(cuid())
   orderId          String        @unique
   order            Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  gateway          String        @default("RAZORPAY")
-  gatewayOrderId   String        @unique
+  gateway          String        @default("DIRECT_UPI")
+  gatewayOrderId   String?       @unique
   gatewayPaymentId String?       @unique
   gatewaySignature String?
   amount           Decimal       @db.Decimal(10, 2)
