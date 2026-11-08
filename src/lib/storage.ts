@@ -1,8 +1,27 @@
 /**
- * Uploads a product image directly to the free Supabase Cloud Storage bucket ("products")
+ * Uploads a product image directly to Cloudinary (with fallback to Supabase Storage)
  * 100% Free Tier ($0 / Zero Billing), No credit card required.
  */
 export async function uploadProductImage(file: File): Promise<string> {
+  // 1. Try Cloudinary via secure server API route
+  try {
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const res = await fetch("/api/upload", {
+      method: "POST",
+      body: formData,
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.url) return data.url;
+    }
+  } catch (err) {
+    console.warn("Cloudinary upload failed, trying Supabase storage fallback:", err);
+  }
+
+  // 2. Fallback to Supabase Storage
   const supabaseUrl =
     process.env.NEXT_PUBLIC_SUPABASE_URL || "https://ptpywwirakaikotcmkkj.supabase.co";
   const apiKey =
@@ -31,7 +50,5 @@ export async function uploadProductImage(file: File): Promise<string> {
     throw new Error(errorData?.message || "Failed to upload image to cloud storage.");
   }
 
-  // Public CDN URL
   return `${supabaseUrl}/storage/v1/object/public/products/${fileName}`;
 }
-
