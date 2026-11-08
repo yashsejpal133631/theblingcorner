@@ -1,0 +1,15 @@
+{
+  "hosting": {
+    "site": "theblingcorner",
+    "source": ".",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "frameworksBackend": {
+      "region": "asia-south1"
+    }
+  }
+}
+

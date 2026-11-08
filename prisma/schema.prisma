@@ -1,0 +1,248 @@
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  CUSTOMER
+  VENDOR
+  SUPER_ADMIN
+}
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  PAID
+  PROCESSING
+  PACKED
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  REFUNDED
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
+enum ShippingZoneType {
+  LOCAL
+  WITHIN_STATE
+  ZONE_METRO
+  OTHER_STATE
+}
+
+model User {
+  id            String     @id @default(cuid())
+  name          String?
+  email         String     @unique
+  emailVerified DateTime?
+  passwordHash  String?
+  phone         String?
+  role          Role       @default(CUSTOMER)
+  image         String?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  addresses     Address[]
+  orders        Order[]
+  reviews       Review[]
+  auditLogs     AuditLog[]
+
+  @@index([email])
+  @@index([role])
+}
+
+model Address {
+  id           String   @id @default(cuid())
+  userId       String?
+  user         User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fullName     String
+  phone        String
+  street       String
+  landmark     String?
+  city         String
+  state        String
+  pincode      String
+  isDefault    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  
+  orders       Order[]
+}
+
+model Category {
+  id           String    @id @default(cuid())
+  name         String    @unique
+  slug         String    @unique
+  description  String?
+  imageUrl     String?
+  displayOrder Int       @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  products     Product[]
+}
+
+model Product {
+  id            String         @id @default(cuid())
+  title         String
+  slug          String         @unique
+  description   String         @db.Text
+  price         Decimal        @db.Decimal(10, 2)
+  comparePrice  Decimal?       @db.Decimal(10, 2)
+  weightGrams   Int            @default(150)
+  stockQuantity Int            @default(0)
+  sku           String?        @unique
+  isFeatured    Boolean        @default(false)
+  isActive      Boolean        @default(true)
+  categoryId    String
+  category      Category       @relation(fields: [categoryId], references: [id])
+  images        ProductImage[]
+  variants      ProductVariant[]
+  reviews       Review[]
+  orderItems    OrderItem[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@index([categoryId])
+  @@index([slug])
+  @@index([isActive])
+}
+
+model ProductImage {
+  id        String   @id @default(cuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  url       String
+  altText   String?
+  isPrimary Boolean  @default(false)
+  sortOrder Int      @default(0)
+
+  @@index([productId])
+}
+
+model ProductVariant {
+  id          String   @id @default(cuid())
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  title       String   // e.g. "Color: Blue", "Size: Small"
+  sku         String?  @unique
+  price       Decimal? @db.Decimal(10, 2)
+  stock       Int      @default(0)
+  weightGrams Int?
+
+  @@index([productId])
+}
+
+model Order {
+  id               String        @id @default(cuid())
+  orderNumber      String        @unique // e.g. TBC-202611-1001
+  userId           String?
+  user             User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  guestEmail       String?
+  guestPhone       String?
+  addressId        String?
+  address          Address?      @relation(fields: [addressId], references: [id])
+  shippingAddress  Json          // Address snapshot at order time
+  
+  subtotal         Decimal       @db.Decimal(10, 2)
+  shippingFee      Decimal       @db.Decimal(10, 2)
+  totalWeightGrams Int           @default(0)
+  discountAmount   Decimal       @default(0) @db.Decimal(10, 2)
+  totalAmount      Decimal       @db.Decimal(10, 2)
+  
+  status           OrderStatus   @default(PENDING_PAYMENT)
+  paymentStatus    PaymentStatus @default(PENDING)
+  trackingNumber   String?
+  courierPartner   String?
+  notes            String?       @db.Text
+  
+  items            OrderItem[]
+  payment          Payment?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  @@index([orderNumber])
+  @@index([userId])
+  @@index([status])
+}
+
+model OrderItem {
+  id         String   @id @default(cuid())
+  orderId    String
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id])
+  title      String
+  quantity   Int
+  unitPrice  Decimal  @db.Decimal(10, 2)
+  totalPrice Decimal  @db.Decimal(10, 2)
+  imageUrl   String?
+
+  @@index([orderId])
+}
+
+model Payment {
+  id               String        @id @default(cuid())
+  orderId          String        @unique
+  order            Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  gateway          String        @default("RAZORPAY")
+  gatewayOrderId   String        @unique
+  gatewayPaymentId String?       @unique
+  gatewaySignature String?
+  amount           Decimal       @db.Decimal(10, 2)
+  currency         String        @default("INR")
+  status           PaymentStatus @default(PENDING)
+  payload          Json?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  @@index([gatewayOrderId])
+}
+
+model ShippingRateRule {
+  id        String           @id @default(cuid())
+  maxWeight Int              // in grams (500, 1000, 1500, 2000)
+  zone      ShippingZoneType
+  price     Decimal          @db.Decimal(10, 2)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  @@unique([maxWeight, zone])
+}
+
+model Review {
+  id         String   @id @default(cuid())
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rating     Int      @default(5)
+  comment    String   @db.Text
+  isVerified Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  @@index([productId])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action    String
+  resource  String
+  details   Json?
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  @@index([action])
+  @@index([resource])
+}
