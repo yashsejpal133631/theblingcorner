@@ -34,3 +34,4 @@ export async function uploadProductImage(file: File): Promise<string> {
   // Public CDN URL
   return `${supabaseUrl}/storage/v1/object/public/products/${fileName}`;
 }
+
