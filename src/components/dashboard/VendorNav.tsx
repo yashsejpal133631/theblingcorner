@@ -24,6 +24,7 @@ export function VendorNav() {
     { name: "UPI Payments", href: "/vendor/payments" },
     { name: "Orders & Dispatch", href: "/vendor/orders" },
     { name: "Products & Stock", href: "/vendor/products" },
+    { name: "Coupons & Discounts", href: "/vendor/coupons" },
   ];
 
   return (
