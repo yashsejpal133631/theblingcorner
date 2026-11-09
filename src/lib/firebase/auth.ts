@@ -44,3 +44,4 @@ export async function signInWithGoogle(): Promise<GoogleAuthUser> {
     image: user.photoURL || null,
   };
 }
+

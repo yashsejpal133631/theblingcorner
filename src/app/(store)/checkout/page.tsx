@@ -26,6 +26,8 @@ import {
   ExternalLink,
   X,
 } from "lucide-react";
+import { GoogleIcon } from "@/components/ui/icons";
+import { signInWithGoogle } from "@/lib/firebase/auth";
 
 const UPI_ID = "tejasandodariya3525@oksbi";
 const MERCHANT_NAME = "The Bling Corner";
@@ -60,6 +62,47 @@ export default function CheckoutPage() {
   // Submission state
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
+
+  // Auto-fill logged-in customer info if available
+  React.useEffect(() => {
+    async function loadUser() {
+      try {
+        const res = await fetch("/api/auth/me");
+        if (res.ok) {
+          const data = await res.json();
+          if (data.authenticated && data.user) {
+            if (data.user.name) setFullName(data.user.name);
+            if (data.user.email) setEmail(data.user.email);
+            if (data.user.phone) setPhone(data.user.phone);
+          }
+        }
+      } catch (e) {
+        console.warn("Failed to autofill logged in user:", e);
+      }
+    }
+    loadUser();
+  }, []);
+
+  const handleGoogleAutofill = async () => {
+    try {
+      setErrorMessage(null);
+      const googleUser = await signInWithGoogle();
+      const res = await fetch("/api/auth/google", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(googleUser),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.user?.name) setFullName(data.user.name);
+        if (data.user?.email) setEmail(data.user.email);
+      }
+    } catch (err: any) {
+      if (err.code !== "auth/popup-closed-by-user") {
+        console.error("Google autofill error:", err);
+      }
+    }
+  };
 
   // Auto-calculate shipping whenever 6-digit pincode is entered
   React.useEffect(() => {
@@ -294,6 +337,16 @@ export default function CheckoutPage() {
                   Step 1 of 3
                 </span>
               </div>
+
+              {/* 1-Tap Autofill with Google */}
+              <button
+                type="button"
+                onClick={handleGoogleAutofill}
+                className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl border border-neutral-200 bg-neutral-50 hover:bg-neutral-100/80 text-xs font-semibold text-neutral-800 transition-colors shadow-2xs"
+              >
+                <GoogleIcon className="h-4 w-4" />
+                <span>Quick Autofill Name & Email with Google</span>
+              </button>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <Input
                   id="fullName"
