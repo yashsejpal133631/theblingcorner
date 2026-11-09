@@ -80,7 +80,7 @@ export default function CartPage() {
                     {/* Thumbnail */}
                     <div className="relative h-24 w-24 sm:h-28 sm:w-28 flex-shrink-0 rounded-2xl overflow-hidden bg-neutral-100 border border-neutral-200">
                       <Image
-                        src={item.imageUrl || "/images/placeholder.jpg"}
+                        src={item.imageUrl || "/placeholder.svg"}
                         alt={item.title}
                         fill
                         className="object-cover object-center"

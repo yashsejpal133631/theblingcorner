@@ -45,6 +45,7 @@ interface OrderData {
     | "SHIPPED"
     | "DELIVERED"
     | "CANCELLED";
+  paymentStatus?: string;
   createdAt: string;
   updatedAt: string;
   subtotal: number;
@@ -99,47 +100,68 @@ function getStepIndex(status: string): number {
 function TrackOrderContent() {
   const searchParams = useSearchParams();
   const initialOrderParam = searchParams.get("orderNumber") || "";
+  const accessToken = searchParams.get("token") || "";
 
   const [orderQuery, setOrderQuery] = React.useState(initialOrderParam);
+  const [contact, setContact] = React.useState("");
   const [order, setOrder] = React.useState<OrderData | null>(null);
   const [isLoading, setIsLoading] = React.useState(false);
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
   const [hasCopiedTracking, setHasCopiedTracking] = React.useState(false);
 
-  const fetchOrder = React.useCallback(async (num: string) => {
-    const clean = num.trim().toUpperCase();
-    if (!clean) return;
+  const fetchOrder = React.useCallback(
+    async (num: string, contactValue: string = "") => {
+      const clean = num.trim().toUpperCase();
+      if (!clean) return;
 
-    setIsLoading(true);
-    setErrorMessage(null);
-
-    try {
-      const res = await fetch(`/api/orders/${encodeURIComponent(clean)}`);
-      const data = await res.json();
-
-      if (!res.ok) {
+      if (!accessToken && contactValue.trim().length < 5) {
         setOrder(null);
-        setErrorMessage(data.error || "Order not found. Please verify your reference number.");
-      } else {
-        setOrder(data.order);
+        setErrorMessage(
+          "Enter the phone number or email used when placing the order."
+        );
+        return;
       }
-    } catch {
-      setErrorMessage("Network error fetching order details. Please try again.");
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+
+      setIsLoading(true);
+      setErrorMessage(null);
+
+      try {
+        const params = new URLSearchParams();
+        if (accessToken) params.set("token", accessToken);
+        if (contactValue.trim()) params.set("contact", contactValue.trim());
+
+        const res = await fetch(
+          `/api/orders/${encodeURIComponent(clean)}?${params.toString()}`
+        );
+        const data = await res.json();
+
+        if (!res.ok) {
+          setOrder(null);
+          setErrorMessage(
+            data.error || "Order not found. Please verify your reference number."
+          );
+        } else {
+          setOrder(data.order);
+        }
+      } catch {
+        setErrorMessage("Network error fetching order details. Please try again.");
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [accessToken]
+  );
 
   React.useEffect(() => {
-    if (initialOrderParam) {
+    if (initialOrderParam && accessToken) {
       fetchOrder(initialOrderParam);
     }
-  }, [initialOrderParam, fetchOrder]);
+  }, [initialOrderParam, accessToken, fetchOrder]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     if (orderQuery.trim()) {
-      fetchOrder(orderQuery);
+      fetchOrder(orderQuery, contact);
     }
   };
 
@@ -167,23 +189,39 @@ function TrackOrderContent() {
       </div>
 
       {/* Search Input Bar */}
-      <form onSubmit={handleSearch} className="flex gap-2 max-w-lg mx-auto mb-10">
-        <div className="relative flex-1">
-          <Search className="w-4 h-4 text-neutral-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-          <Input
-            value={orderQuery}
-            onChange={(e) => setOrderQuery(e.target.value)}
-            placeholder="e.g. TBC-202611-1049"
-            className="pl-10 h-12 rounded-xl border-neutral-300 font-mono text-sm uppercase"
-          />
+      <form onSubmit={handleSearch} className="space-y-2 max-w-lg mx-auto mb-10">
+        <div className="flex gap-2">
+          <div className="relative flex-1">
+            <Search className="w-4 h-4 text-neutral-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+            <Input
+              value={orderQuery}
+              onChange={(e) => setOrderQuery(e.target.value)}
+              placeholder="e.g. TBC-202611-1049"
+              className="pl-10 h-12 rounded-xl border-neutral-300 font-mono text-sm uppercase"
+            />
+          </div>
+          <Button
+            type="submit"
+            disabled={isLoading || !orderQuery.trim()}
+            className="h-12 px-6 bg-rose-900 hover:bg-rose-950 text-white rounded-xl font-medium shrink-0"
+          >
+            {isLoading ? "Searching..." : "Track"}
+          </Button>
         </div>
-        <Button
-          type="submit"
-          disabled={isLoading || !orderQuery.trim()}
-          className="h-12 px-6 bg-rose-900 hover:bg-rose-950 text-white rounded-xl font-medium shrink-0"
-        >
-          {isLoading ? "Searching..." : "Track"}
-        </Button>
+        {!accessToken && (
+          <Input
+            value={contact}
+            onChange={(e) => setContact(e.target.value)}
+            placeholder="Phone or email used on the order"
+            className="h-11 rounded-xl border-neutral-300 text-sm"
+            aria-label="Phone or email used on the order"
+          />
+        )}
+        <p className="text-[11px] text-neutral-500 text-center">
+          {accessToken
+            ? "Signed order link detected. Details load automatically."
+            : "For your privacy, order details require the phone number or email used at checkout."}
+        </p>
       </form>
 
       {/* Error state */}
@@ -243,7 +281,7 @@ function TrackOrderContent() {
 
             {order.status === "CANCELLED" ? (
               <div className="p-4 bg-red-50 text-red-700 rounded-xl text-sm font-medium">
-                This order has been cancelled and refunded.
+                This order was cancelled and no payment was confirmed. If money left your account, contact us with your UTR so we can reconcile it.
               </div>
             ) : (
               <div className="relative">
@@ -395,7 +433,9 @@ function TrackOrderContent() {
                     <span>{formatPrice(order.shippingFee)}</span>
                   </div>
                   <div className="flex justify-between text-neutral-900 font-bold pt-1.5 border-t border-neutral-200 text-sm">
-                    <span>Total Paid:</span>
+                    <span>
+                      {order.paymentStatus === "SUCCESS" ? "Total Paid:" : "Order Total:"}
+                    </span>
                     <span className="text-rose-900">{formatPrice(order.totalAmount)}</span>
                   </div>
                 </div>

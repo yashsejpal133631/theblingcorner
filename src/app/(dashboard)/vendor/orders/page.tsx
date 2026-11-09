@@ -5,6 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { VendorNav } from "@/components/dashboard/VendorNav";
 import { formatPrice } from "@/lib/utils";
+import { UPI_VPA } from "@/lib/upi-config";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -68,6 +69,7 @@ interface VendorOrder {
   };
   items: OrderItem[];
   payment?: {
+    id: string;
     status: string;
     paymentMethod: string;
   };
@@ -88,6 +90,8 @@ export default function VendorOrdersPage() {
   const [verifyModalOrder, setVerifyModalOrder] = React.useState<VendorOrder | null>(null);
   const [previewImage, setPreviewImage] = React.useState<string | null>(null);
   const [copiedUtr, setCopiedUtr] = React.useState<string | null>(null);
+  const [rejectionReason, setRejectionReason] = React.useState("");
+  const [actionError, setActionError] = React.useState<string | null>(null);
 
   const fetchOrders = async () => {
     try {
@@ -116,6 +120,7 @@ export default function VendorOrdersPage() {
   ) => {
     try {
       setIsUpdating(true);
+      setActionError(null);
       const res = await fetch(`/api/orders/${encodeURIComponent(orderNumber)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -126,6 +131,7 @@ export default function VendorOrdersPage() {
         }),
       });
 
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
         setOrders((prev) =>
           prev.map((o) =>
@@ -142,9 +148,60 @@ export default function VendorOrdersPage() {
         setShipModalOrder(null);
         setVerifyModalOrder(null);
         setTrackingNumber("");
+        setRejectionReason("");
+      } else {
+        setActionError(data.error || "Could not update this order.");
       }
     } catch (err) {
+      setActionError("Network error while updating the order.");
       console.error("Failed to update status", err);
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  const handleUpiAction = async (
+    order: VendorOrder,
+    action: "verify" | "reject"
+  ) => {
+    if (!order.payment?.id) {
+      setActionError("This order has no payment record to verify.");
+      return;
+    }
+    if (action === "reject" && rejectionReason.trim().length < 3) {
+      setActionError("Please enter a rejection reason (at least 3 characters).");
+      return;
+    }
+
+    try {
+      setIsUpdating(true);
+      setActionError(null);
+
+      const res = await fetch(
+        `/api/admin/payments/${encodeURIComponent(order.payment.id)}/${action}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            action === "verify"
+              ? { note: "Verified against bank statement" }
+              : { reason: rejectionReason.trim() }
+          ),
+        }
+      );
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setActionError(data.error || `Could not ${action} this payment.`);
+        return;
+      }
+
+      setVerifyModalOrder(null);
+      setRejectionReason("");
+      await fetchOrders();
+    } catch (err) {
+      console.error("Payment action error", err);
+      setActionError("Network error while updating the payment.");
     } finally {
       setIsUpdating(false);
     }
@@ -443,7 +500,7 @@ export default function VendorOrdersPage() {
                     )}
 
                     {/* MIS-TOUCH PROTECTED: SHIPPED BUTTON OPENS CONFIRMATION POPUP MODAL */}
-                    {(order.status === "PAID" || order.status === "PACKED") && (
+                    {order.status === "PACKED" && (
                       <Button
                         size="sm"
                         onClick={() => {
@@ -669,8 +726,27 @@ export default function VendorOrdersPage() {
               </div>
             )}
 
+            <div>
+              <label className="text-xs font-bold text-neutral-800 block mb-1">
+                Rejection Reason (only used if you reject)
+              </label>
+              <Input
+                value={rejectionReason}
+                onChange={(e) => setRejectionReason(e.target.value)}
+                placeholder="e.g. UTR not found in bank statement"
+                className="h-10 text-xs rounded-xl bg-white"
+              />
+            </div>
+
+            {actionError && (
+              <div className="flex items-start gap-2 rounded-xl bg-red-50 border border-red-200 p-3 text-xs text-red-800">
+                <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                <span>{actionError}</span>
+              </div>
+            )}
+
             <p className="text-[11px] text-neutral-500 leading-relaxed">
-              ⚠️ Please confirm money is credited in your personal UPI app (<strong>tejasandodariya3525@oksbi</strong>) before confirming.
+              ⚠️ Please confirm money is credited in your UPI app (<strong>{UPI_VPA}</strong>) before confirming.
             </p>
 
             <div className="pt-3 border-t border-neutral-100 flex items-center justify-end gap-2">
@@ -678,7 +754,7 @@ export default function VendorOrdersPage() {
                 type="button"
                 variant="outline"
                 size="sm"
-                onClick={() => handleUpdateStatus(verifyModalOrder.orderNumber, "CANCELLED")}
+                onClick={() => handleUpiAction(verifyModalOrder, "reject")}
                 disabled={isUpdating}
                 className="text-xs font-semibold text-red-700 border-red-200 hover:bg-red-50 rounded-xl"
               >
@@ -687,8 +763,8 @@ export default function VendorOrdersPage() {
               <Button
                 type="button"
                 size="sm"
-                onClick={() => handleUpdateStatus(verifyModalOrder.orderNumber, "PAID")}
-                disabled={isUpdating}
+                onClick={() => handleUpiAction(verifyModalOrder, "verify")}
+                disabled={isUpdating || !verifyModalOrder.payment?.id}
                 className="text-xs font-bold bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl"
               >
                 {isUpdating ? "Confirming..." : "Confirmed, Mark as PAID"}

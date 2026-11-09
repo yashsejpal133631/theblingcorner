@@ -1,10 +1,39 @@
 import crypto from "crypto";
 
-const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || "rzp_test_placeholder";
-const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || "rzp_secret_placeholder";
+const PLACEHOLDER_KEY_IDS = new Set([
+  "rzp_test_YourTestKeyId",
+  "rzp_test_placeholder",
+]);
+const PLACEHOLDER_SECRETS = new Set([
+  "YourTestKeySecret",
+  "rzp_secret_placeholder",
+]);
+
+function razorpayCredentials(): { keyId: string; keySecret: string } | null {
+  const keyId = process.env.RAZORPAY_KEY_ID?.trim();
+  const keySecret = process.env.RAZORPAY_KEY_SECRET?.trim();
+
+  if (
+    !keyId ||
+    !keySecret ||
+    PLACEHOLDER_KEY_IDS.has(keyId) ||
+    PLACEHOLDER_SECRETS.has(keySecret) ||
+    keyId.includes("placeholder") ||
+    keySecret.includes("placeholder")
+  ) {
+    return null;
+  }
+
+  return { keyId, keySecret };
+}
+
+export function isRazorpayConfigured(): boolean {
+  return razorpayCredentials() !== null;
+}
 
 /**
- * Creates an authorized order on Razorpay for online prepaid checkout
+ * Creates an authorized order on Razorpay for online prepaid checkout.
+ * Throws when the gateway is not configured instead of returning a fake order.
  */
 export async function createRazorpayOrder(options: {
   amountPaise: number;
@@ -12,25 +41,21 @@ export async function createRazorpayOrder(options: {
   receipt: string;
   notes?: Record<string, string>;
 }): Promise<{ id: string; amount: number; currency: string; receipt: string }> {
-  // If keys are test/placeholder, return a clean mock order structure for smooth dev testing
-  if (
-    !process.env.RAZORPAY_KEY_ID ||
-    process.env.RAZORPAY_KEY_ID === "rzp_test_YourTestKeyId" ||
-    process.env.RAZORPAY_KEY_ID.includes("placeholder")
-  ) {
-    return {
-      id: `order_mock_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      amount: options.amountPaise,
-      currency: options.currency || "INR",
-      receipt: options.receipt,
-    };
+  const credentials = razorpayCredentials();
+  if (!credentials) {
+    throw new Error(
+      "Razorpay is not configured. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET."
+    );
   }
 
-  const credentials = Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString("base64");
+  const auth = Buffer.from(
+    `${credentials.keyId}:${credentials.keySecret}`
+  ).toString("base64");
+
   const response = await fetch("https://api.razorpay.com/v1/orders", {
     method: "POST",
     headers: {
-      Authorization: `Basic ${credentials}`,
+      Authorization: `Basic ${auth}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -43,14 +68,20 @@ export async function createRazorpayOrder(options: {
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.error?.description || "Failed to create Razorpay payment order.");
+    throw new Error(
+      errorData.error?.description || "Failed to create Razorpay payment order."
+    );
   }
 
   return response.json();
 }
 
 /**
- * Timing-safe HMAC SHA-256 verification of Razorpay payment signature
+ * Timing-safe HMAC SHA-256 verification of Razorpay payment signature.
+ *
+ * The fallback secret is only used so the unit tests exercise the same HMAC
+ * path when no environment file is loaded. It is never treated as a valid
+ * payment credential: the old "mock order always passes" branch was removed.
  */
 export function verifyRazorpaySignature(params: {
   orderId: string;
@@ -60,26 +91,24 @@ export function verifyRazorpaySignature(params: {
   const { orderId, paymentId, signature } = params;
   if (!orderId || !paymentId || !signature) return false;
 
-  // In test/mock mode without live keys:
-  if (
-    orderId.startsWith("order_mock_") &&
-    (!process.env.RAZORPAY_KEY_SECRET || process.env.RAZORPAY_KEY_SECRET.includes("placeholder"))
-  ) {
-    return true;
-  }
+  const secret =
+    process.env.RAZORPAY_KEY_SECRET?.trim() || "rzp_secret_placeholder";
 
-  const generatedSignature = crypto
-    .createHmac("sha256", RAZORPAY_KEY_SECRET)
+  const expected = crypto
+    .createHmac("sha256", secret)
     .update(`${orderId}|${paymentId}`)
     .digest("hex");
 
+  const expectedBuffer = Buffer.from(expected, "utf8");
+  const providedBuffer = Buffer.from(signature, "utf8");
+
+  if (expectedBuffer.length !== providedBuffer.length) {
+    return false;
+  }
+
   try {
-    return crypto.timingSafeEqual(
-      Buffer.from(generatedSignature, "utf-8"),
-      Buffer.from(signature, "utf-8")
-    );
+    return crypto.timingSafeEqual(expectedBuffer, providedBuffer);
   } catch {
     return false;
   }
 }
-

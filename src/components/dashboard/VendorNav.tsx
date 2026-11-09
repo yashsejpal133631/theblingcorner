@@ -21,6 +21,7 @@ export function VendorNav() {
 
   const navLinks = [
     { name: "Overview", href: "/vendor" },
+    { name: "UPI Payments", href: "/vendor/payments" },
     { name: "Orders & Dispatch", href: "/vendor/orders" },
     { name: "Products & Stock", href: "/vendor/products" },
   ];

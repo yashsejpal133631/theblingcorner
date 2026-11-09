@@ -21,6 +21,7 @@ interface VendorStats {
   totalRevenue: number;
   totalOrders: number;
   pendingOrders: number;
+  awaitingPayment: number;
   lowStockProducts: number;
   outOfStockProducts: number;
   totalProducts: number;
@@ -31,6 +32,7 @@ export default function VendorDashboardPage() {
     totalRevenue: 0,
     totalOrders: 0,
     pendingOrders: 0,
+    awaitingPayment: 0,
     lowStockProducts: 0,
     outOfStockProducts: 0,
     totalProducts: 0,
@@ -93,6 +95,31 @@ export default function VendorDashboardPage() {
           </div>
         </div>
 
+        {stats.awaitingPayment > 0 && (
+          <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-amber-600 mt-0.5 shrink-0" />
+              <div>
+                <p className="text-sm font-bold text-amber-900">
+                  {stats.awaitingPayment} Direct UPI payment
+                  {stats.awaitingPayment === 1 ? "" : "s"} waiting for verification
+                </p>
+                <p className="text-xs text-amber-800 mt-0.5">
+                  Match the 12-digit UTR against your bank statement before packing these orders.
+                </p>
+              </div>
+            </div>
+            <Link href="/vendor/payments">
+              <Button
+                size="sm"
+                className="text-xs font-semibold rounded-xl bg-amber-600 hover:bg-amber-700 text-white gap-1.5 h-9"
+              >
+                Verify Payments <ArrowRight className="w-3.5 h-3.5" />
+              </Button>
+            </Link>
+          </div>
+        )}
+
         {/* Analytics Metric Cards */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mt-6">
           {/* Revenue */}
@@ -107,7 +134,7 @@ export default function VendorDashboardPage() {
               {isLoading ? "—" : formatPrice(stats.totalRevenue)}
             </p>
             <p className="text-[11px] text-emerald-600 font-medium mt-1 flex items-center gap-0.5">
-              <TrendingUp className="w-3 h-3" /> 100% Prepaid via Razorpay
+              <TrendingUp className="w-3 h-3" /> Verified payments only
             </p>
           </div>
 

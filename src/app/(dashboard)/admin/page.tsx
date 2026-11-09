@@ -17,6 +17,7 @@ import {
   CheckCircle2,
   Server,
   FileText,
+  ArrowRight,
 } from "lucide-react";
 
 interface AdminUser {
@@ -118,6 +119,13 @@ export default function SuperAdminPage() {
 
             <div className="flex items-center space-x-3">
               <Link
+                href="/admin/payments"
+                className="text-xs text-rose-200 hover:text-white px-3 py-1.5 rounded-lg border border-rose-800 bg-rose-950/60 hover:bg-rose-900 flex items-center gap-1"
+              >
+                <span>Verify UPI Payments</span>
+                <ArrowRight className="w-3 h-3" />
+              </Link>
+              <Link
                 href="/vendor"
                 className="text-xs text-neutral-400 hover:text-white px-3 py-1.5 rounded-lg border border-neutral-800 hover:bg-neutral-800 flex items-center gap-1"
               >
@@ -165,8 +173,8 @@ export default function SuperAdminPage() {
               <span className="text-xs font-mono uppercase tracking-wider">Payment Gateway Health</span>
               <Activity className="w-4 h-4 text-rose-400" />
             </div>
-            <p className="text-xl font-bold text-white mt-2">Razorpay Standard UPI</p>
-            <p className="text-xs text-neutral-400 mt-1">Prepaid Online Only • HMAC-SHA256 verified</p>
+            <p className="text-xl font-bold text-white mt-2">Direct UPI + Admin Verification</p>
+            <p className="text-xs text-neutral-400 mt-1">UTR-matched before fulfilment • Razorpay optional</p>
           </div>
 
           <div className="bg-neutral-950 p-5 rounded-2xl border border-neutral-800 shadow-sm">

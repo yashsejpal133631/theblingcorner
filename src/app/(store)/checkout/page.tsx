@@ -25,12 +25,18 @@ import {
   Smartphone,
   ExternalLink,
   X,
+  Sparkles,
 } from "lucide-react";
 import { GoogleIcon } from "@/components/ui/icons";
 import { signInWithGoogle } from "@/lib/firebase/auth";
+import {
+  MERCHANT_NAME,
+  UPI_VPA,
+  buildUpiPayUrl,
+  isUpiConfigured,
+} from "@/lib/upi-config";
 
-const UPI_ID = "tejasandodariya3525@oksbi";
-const MERCHANT_NAME = "The Bling Corner";
+const MAX_RECEIPT_BYTES = 8 * 1024 * 1024;
 
 export default function CheckoutPage() {
   const router = useRouter();
@@ -58,6 +64,16 @@ export default function CheckoutPage() {
   const [upiScreenshotUrl, setUpiScreenshotUrl] = React.useState("");
   const [isUploadingScreenshot, setIsUploadingScreenshot] = React.useState(false);
   const [hasCopiedUpi, setHasCopiedUpi] = React.useState(false);
+
+  // Coupon / Promo Code State
+  const [couponCode, setCouponCode] = React.useState("");
+  const [appliedCoupon, setAppliedCoupon] = React.useState<{
+    code: string;
+    discountAmount: number;
+    description: string;
+  } | null>(null);
+  const [couponError, setCouponError] = React.useState<string | null>(null);
+  const [isValidatingCoupon, setIsValidatingCoupon] = React.useState(false);
 
   // Submission state
   const [isSubmitting, setIsSubmitting] = React.useState(false);
@@ -139,14 +155,45 @@ export default function CheckoutPage() {
     }
   }, [pincode, totalWeightGrams, city, state]);
 
-  // Final Total Amount
-  const totalAmount = subtotal + (shippingFee || 0);
+  // Final Total Amount with Coupon Discount
+  const discountAmount = appliedCoupon ? appliedCoupon.discountAmount : 0;
+  const totalAmount = Math.max(0, subtotal + (shippingFee || 0) - discountAmount);
+
+  const handleApplyCoupon = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!couponCode.trim()) return;
+    try {
+      setIsValidatingCoupon(true);
+      setCouponError(null);
+      const res = await fetch("/api/coupons/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code: couponCode.trim(),
+          subtotal,
+          shippingFee: shippingFee || 0,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.valid) {
+        setCouponError(data.error || "Invalid coupon code.");
+        return;
+      }
+      setAppliedCoupon(data.coupon);
+      setCouponCode("");
+    } catch {
+      setCouponError("Failed to validate coupon code.");
+    } finally {
+      setIsValidatingCoupon(false);
+    }
+  };
 
   // Dynamic UPI string for QR & App links
   const upiPayUrl = React.useMemo(() => {
-    const encodedMerchant = encodeURIComponent(MERCHANT_NAME);
-    const encodedNote = encodeURIComponent(`Order_${phone || "TBC"}`);
-    return `upi://pay?pa=${UPI_ID}&pn=${encodedMerchant}&am=${totalAmount.toFixed(2)}&cu=INR&tn=${encodedNote}`;
+    return buildUpiPayUrl({
+      amount: totalAmount,
+      note: `Order_${phone || "TBC"}`,
+    });
   }, [totalAmount, phone]);
 
   const qrImageUrl = React.useMemo(() => {
@@ -154,7 +201,7 @@ export default function CheckoutPage() {
   }, [upiPayUrl]);
 
   const copyUpiId = () => {
-    navigator.clipboard.writeText(UPI_ID);
+    navigator.clipboard.writeText(UPI_VPA);
     setHasCopiedUpi(true);
     setTimeout(() => setHasCopiedUpi(false), 2000);
   };
@@ -168,8 +215,8 @@ export default function CheckoutPage() {
       return;
     }
 
-    if (file.size > 10 * 1024 * 1024) {
-      setErrorMessage("Screenshot size must be under 10MB.");
+    if (file.size > MAX_RECEIPT_BYTES) {
+      setErrorMessage("Screenshot size must be under 8MB.");
       return;
     }
 
@@ -178,9 +225,8 @@ export default function CheckoutPage() {
       setErrorMessage(null);
       const formData = new FormData();
       formData.append("file", file);
-      formData.append("folder", "theblingcorner/receipts");
 
-      const res = await fetch("/api/upload", {
+      const res = await fetch("/api/checkout/upload-receipt", {
         method: "POST",
         body: formData,
       });
@@ -208,7 +254,14 @@ export default function CheckoutPage() {
       return;
     }
 
-    if (!shippingFee) {
+    if (!isUpiConfigured()) {
+      setErrorMessage(
+        "Direct UPI is temporarily unavailable. Please contact the store on Instagram."
+      );
+      return;
+    }
+
+    if (shippingFee === null) {
       setErrorMessage("Please enter a valid 6-digit postal pincode to calculate shipping charges.");
       return;
     }
@@ -242,6 +295,9 @@ export default function CheckoutPage() {
             pincode,
           },
           paymentMethod: "DIRECT_UPI",
+          expectedTotal: totalAmount,
+          discountAmount: appliedCoupon ? appliedCoupon.discountAmount : 0,
+          couponCode: appliedCoupon?.code || undefined,
           upiUtrNumber: cleanUtr,
           upiScreenshotUrl: upiScreenshotUrl || undefined,
           notes: notes || undefined,
@@ -256,7 +312,12 @@ export default function CheckoutPage() {
       }
 
       clearCart();
-      router.push(`/checkout/success?orderNumber=${encodeURIComponent(orderData.orderNumber)}&paymentMethod=DIRECT_UPI`);
+      const query = new URLSearchParams({
+        orderNumber: orderData.orderNumber,
+        paymentMethod: "DIRECT_UPI",
+      });
+      if (orderData.accessToken) query.set("token", orderData.accessToken);
+      router.push(`/checkout/success?${query.toString()}`);
     } catch (err) {
       console.error("Checkout order submission error:", err);
       setErrorMessage("Network error during order submission. Please try again.");
@@ -512,7 +573,7 @@ export default function CheckoutPage() {
                   </label>
                   <div className="flex items-center gap-2">
                     <div className="flex-1 bg-neutral-50 border border-neutral-200 rounded-lg px-3 py-2 font-mono text-xs sm:text-sm font-bold text-neutral-900 select-all">
-                      {UPI_ID}
+                      {UPI_VPA}
                     </div>
                     <Button
                       type="button"
@@ -668,7 +729,7 @@ export default function CheckoutPage() {
                         {isUploadingScreenshot ? "Uploading to secure CDN..." : "Click or tap to upload receipt image"}
                       </span>
                       <span className="text-[11px] text-neutral-400 mt-0.5">
-                        PNG, JPG, or WebP up to 10MB
+                        PNG, JPG, or WebP up to 8MB
                       </span>
                       <input
                         type="file"
@@ -697,7 +758,7 @@ export default function CheckoutPage() {
                   <div key={item.id} className="pt-2 flex items-center justify-between gap-3">
                     <div className="relative h-12 w-12 flex-shrink-0 rounded-lg overflow-hidden bg-neutral-100">
                       <Image
-                        src={item.imageUrl || "/images/placeholder.jpg"}
+                        src={item.imageUrl || "/placeholder.svg"}
                         alt={item.title}
                         fill
                         className="object-cover"
@@ -714,12 +775,69 @@ export default function CheckoutPage() {
                 ))}
               </div>
 
+              {/* Coupon / Promo Code Box */}
+              <div className="border-t border-neutral-100 pt-3">
+                {appliedCoupon ? (
+                  <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-xs flex items-center justify-between">
+                    <div>
+                      <p className="font-bold text-emerald-950 flex items-center gap-1">
+                        <Sparkles className="h-3.5 w-3.5 text-emerald-700" />
+                        {appliedCoupon.code} Applied!
+                      </p>
+                      <p className="text-[10px] text-emerald-800">{appliedCoupon.description}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setAppliedCoupon(null)}
+                      className="text-[11px] font-bold text-red-600 hover:underline ml-2"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="Coupon code (e.g. WELCOME10)"
+                        value={couponCode}
+                        onChange={(e) => {
+                          setCouponCode(e.target.value);
+                          setCouponError(null);
+                        }}
+                        className="flex-1 rounded-xl border border-neutral-300 py-1.5 px-3 text-xs uppercase placeholder:normal-case placeholder:text-neutral-400 focus:outline-none focus:ring-1 focus:ring-rose-800"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleApplyCoupon}
+                        disabled={isValidatingCoupon || !couponCode.trim()}
+                        className="px-3 py-1.5 rounded-xl bg-neutral-900 hover:bg-neutral-800 text-white font-bold text-xs disabled:opacity-50"
+                      >
+                        {isValidatingCoupon ? "Checking..." : "Apply"}
+                      </button>
+                    </div>
+                    {couponError && (
+                      <p className="text-[10px] text-red-600 font-medium">{couponError}</p>
+                    )}
+                    <p className="text-[10px] text-neutral-400">
+                      💡 Tip: Use <strong className="text-neutral-700">WELCOME10</strong> or <strong className="text-neutral-700">BLING50</strong>
+                    </p>
+                  </div>
+                )}
+              </div>
+
               {/* Pricing breakdown */}
               <div className="space-y-2 border-t border-neutral-100 pt-4 text-xs sm:text-sm">
                 <div className="flex items-center justify-between text-neutral-600">
                   <span>Subtotal</span>
                   <span className="font-bold text-neutral-900">{formatPrice(subtotal)}</span>
                 </div>
+                {appliedCoupon && (
+                  <div className="flex items-center justify-between text-emerald-700 font-semibold">
+                    <span>Coupon ({appliedCoupon.code})</span>
+                    <span>-{formatPrice(appliedCoupon.discountAmount)}</span>
+                  </div>
+                )}
                 <div className="flex items-center justify-between text-neutral-600">
                   <span className="flex items-center">
                     <Truck className="h-3.5 w-3.5 mr-1 text-rose-900" />
@@ -746,14 +864,20 @@ export default function CheckoutPage() {
               <div className="rounded-xl bg-amber-50 border border-amber-200/80 p-3 text-[11px] text-amber-900 leading-relaxed space-y-1">
                 <p className="font-bold">✨ Zero KYC / 100% Free Direct UPI:</p>
                 <p>
-                  No middleman payment gateway or fees. You pay directly to <strong>{UPI_ID}</strong>, and our team verifies your 12-digit UTR before packing your parcel.
+                  No middleman payment gateway or fees. You pay directly to <strong>{UPI_VPA}</strong>, and our team verifies your 12-digit UTR before packing your parcel.
                 </p>
               </div>
 
               {/* Place Order Button */}
               <Button
                 type="submit"
-                disabled={isSubmitting || shippingFee === null || upiUtrNumber.trim().length !== 12}
+                disabled={
+                  isSubmitting ||
+                  isUploadingScreenshot ||
+                  !isUpiConfigured() ||
+                  shippingFee === null ||
+                  upiUtrNumber.trim().length !== 12
+                }
                 isLoading={isSubmitting}
                 className="w-full h-12 text-sm font-bold bg-rose-900 hover:bg-rose-950 text-white shadow-md shadow-rose-900/10 rounded-xl"
               >

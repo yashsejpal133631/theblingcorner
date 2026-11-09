@@ -1,68 +1,189 @@
+import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { checkoutOrderSchema } from "@/lib/validations/checkout";
 import { resolvePincodeZone, calculateShippingFee } from "@/lib/shipping";
-import { createRazorpayOrder } from "@/lib/razorpay";
+import { createRazorpayOrder, isRazorpayConfigured } from "@/lib/razorpay";
 import { getSession } from "@/lib/auth/session";
+import {
+  enforceRateLimit,
+  getClientIp,
+  jsonError,
+  rejectCrossOrigin,
+} from "@/lib/http";
+import {
+  decrementStock,
+  OutOfStockError,
+  type StockLine,
+} from "@/lib/orders/inventory";
+import { createOrderAccessToken } from "@/lib/orders/access";
+import { normalizeUtr } from "@/lib/payments/upi";
+import { UPI_VPA } from "@/lib/upi-config";
 
-const FALLBACK_PRODUCTS_MAP = new Map([
-  ["prod_1", { id: "prod_1", title: "Cloud Lamp Keychain with Light", price: 199, weightGrams: 150, stockQuantity: 12, images: [{ url: "/placeholder.png" }], variants: [] }],
-  ["prod_2", { id: "prod_2", title: "Starbucks Mini Drink Keychain", price: 149, weightGrams: 80, stockQuantity: 18, images: [{ url: "/placeholder.png" }], variants: [] }],
-  ["prod_3", { id: "prod_3", title: "Pastel Flower Claw Clip Set (3 pcs)", price: 149, weightGrams: 65, stockQuantity: 24, images: [{ url: "/placeholder.png" }], variants: [] }],
-  ["prod_4", { id: "prod_4", title: "Handcrafted Pearl & Glass Bead Bracelet", price: 249, weightGrams: 75, stockQuantity: 15, images: [{ url: "/placeholder.png" }], variants: [{ id: "var_1", title: "Rose Gold", price: 249, stock: 8 }] }],
-  ["prod_5", { id: "prod_5", title: "Vintage Aesthetic Diary Notebook", price: 249, weightGrams: 220, stockQuantity: 9, images: [{ url: "/placeholder.png" }], variants: [] }],
-  ["prod_6", { id: "prod_6", title: "Aesthetic Y2K Beaded Phone Charm", price: 169, weightGrams: 45, stockQuantity: 20, images: [{ url: "/placeholder.png" }], variants: [] }],
-  ["prod_7", { id: "prod_7", title: "Mini Pocket Wet Wipes Canister (Set of 3)", price: 119, weightGrams: 120, stockQuantity: 30, images: [{ url: "/placeholder.png" }], variants: [] }],
-]);
+const DATE_PREFIX = () => {
+  const now = new Date();
+  return `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+};
 
+function generateOrderNumber(): string {
+  return `TBC-${DATE_PREFIX()}-${crypto.randomInt(100000, 1000000)}`;
+}
+
+class DuplicateUtrError extends Error {
+  constructor() {
+    super("Duplicate UTR");
+    this.name = "DuplicateUtrError";
+  }
+}
+
+function isUniqueViolation(error: unknown, field?: string): boolean {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError)) return false;
+  if (error.code !== "P2002") return false;
+  if (!field) return true;
+  return String(error.meta?.target ?? "").includes(field);
+}
+
+interface OrderForResponse {
+  id: string;
+  orderNumber: string;
+  subtotal: Prisma.Decimal;
+  shippingFee: Prisma.Decimal;
+  totalAmount: Prisma.Decimal;
+  paymentStatus: string;
+  status: string;
+}
+
+async function buildOrderResponse(options: {
+  order: OrderForResponse;
+  paymentMethod: string;
+  paymentStatus: string;
+  idempotent: boolean;
+  customer: { name: string; email: string; phone: string };
+  razorpay?: { orderId: string; keyId: string };
+}) {
+  const accessToken = await createOrderAccessToken(options.order.orderNumber);
+
+  return NextResponse.json({
+    success: true,
+    idempotent: options.idempotent,
+    orderId: options.order.id,
+    orderNumber: options.order.orderNumber,
+    amount: Number(options.order.totalAmount),
+    subtotal: Number(options.order.subtotal),
+    shippingFee: Number(options.order.shippingFee),
+    currency: "INR",
+    paymentMethod: options.paymentMethod,
+    paymentStatus: options.paymentStatus,
+    orderStatus: options.order.status,
+    accessToken,
+    customer: options.customer,
+    ...(options.razorpay ? { razorpay: options.razorpay } : {}),
+  });
+}
+
+/**
+ * POST /api/checkout/create-order
+ *
+ * Creates a real order from database products only. No fallback catalogue, no
+ * fake order id, and no "success" unless the order was persisted.
+ */
 export async function POST(request: NextRequest) {
+  const crossOrigin = rejectCrossOrigin(request);
+  if (crossOrigin) return crossOrigin;
+
+  const rateLimited = enforceRateLimit(
+    request,
+    "checkout_create",
+    10,
+    10 * 60 * 1000
+  );
+  if (rateLimited) return rateLimited;
+
   try {
     const body = await request.json().catch(() => null);
     if (!body) {
-      return NextResponse.json({ error: "Invalid JSON request body." }, { status: 400 });
+      return jsonError("Invalid JSON request body.", 400);
     }
 
-    // 1. Zod schema validation
     const validation = checkoutOrderSchema.safeParse(body);
     if (!validation.success) {
-      return NextResponse.json(
-        { error: validation.error.issues[0]?.message || "Invalid checkout data." },
-        { status: 400 }
+      return jsonError(
+        validation.error.issues[0]?.message || "Invalid checkout data.",
+        400
       );
     }
 
-    const { items, shippingAddress, notes, paymentMethod, upiUtrNumber, upiScreenshotUrl } = validation.data;
+    const {
+      items,
+      shippingAddress,
+      notes,
+      paymentMethod,
+      expectedTotal,
+      discountAmount,
+      couponCode,
+      upiUtrNumber,
+      upiScreenshotUrl,
+    } = validation.data;
+
+    const utr = normalizeUtr(upiUtrNumber);
+    if (paymentMethod === "DIRECT_UPI" && !utr) {
+      return jsonError(
+        "A valid 12-digit UPI Reference (UTR) number is required for Direct UPI payment.",
+        400
+      );
+    }
+
+    if (paymentMethod === "RAZORPAY" && !isRazorpayConfigured()) {
+      return jsonError(
+        "Online card payment is temporarily unavailable. Please use Direct UPI.",
+        503
+      );
+    }
+
+    // Resolve a real user id. A stale JWT may reference a deleted account, so
+    // verify the row exists before writing the order foreign key.
     const session = await getSession();
-
-    // 2. Fetch products from Database or fallback
-    const productIds = items.map((i) => i.productId);
-    const productMap = new Map<string, any>();
-
-    try {
-      const dbProducts = await prisma.product.findMany({
-        where: { id: { in: productIds }, isActive: true },
-        include: {
-          images: { where: { isPrimary: true }, take: 1 },
-          variants: true,
-        },
+    let userId: string | null = null;
+    if (session?.userId) {
+      const existingUser = await prisma.user.findUnique({
+        where: { id: session.userId },
+        select: { id: true },
       });
-      for (const p of dbProducts) {
-        productMap.set(p.id, p);
-      }
-    } catch (dbErr) {
-      console.warn("DB product fetch fallback in checkout:", dbErr);
+      userId = existingUser?.id ?? null;
     }
 
-    // Fallback fill for any items not found in DB
-    for (const [id, prod] of FALLBACK_PRODUCTS_MAP.entries()) {
-      if (!productMap.has(id)) {
-        productMap.set(id, prod);
-      }
+    // Deduplicate repeated product lines so the stock reservation is accurate.
+    const requestedQuantities = new Map<string, number>();
+    for (const item of items) {
+      requestedQuantities.set(
+        item.productId,
+        (requestedQuantities.get(item.productId) || 0) + item.quantity
+      );
     }
 
-    // 3. Verify stock and calculate exact subtotal and weight
+    const productIds = Array.from(requestedQuantities.keys());
+    const dbProducts = await prisma.product.findMany({
+      where: { id: { in: productIds }, isActive: true },
+      include: {
+        images: { where: { isPrimary: true }, take: 1 },
+        variants: true,
+      },
+    });
+
+    const productMap = new Map(dbProducts.map((product) => [product.id, product]));
+    const missingIds = productIds.filter((id) => !productMap.has(id));
+    if (missingIds.length > 0) {
+      return jsonError(
+        "One or more items in your bag are no longer available. Please refresh your cart.",
+        409,
+        { unavailableProductIds: missingIds }
+      );
+    }
+
     let subtotal = 0;
     let totalWeightGrams = 0;
+    const stockLines: StockLine[] = [];
     const orderItemsToCreate: Array<{
       productId: string;
       title: string;
@@ -73,41 +194,36 @@ export async function POST(request: NextRequest) {
     }> = [];
 
     for (const item of items) {
-      const product = productMap.get(item.productId) || {
-        id: item.productId,
-        title: "Handcrafted Jewelry Item",
-        price: 249,
-        weightGrams: 80,
-        stockQuantity: 99,
-        images: [],
-        variants: [],
-      };
-
-      let effectiveStock = product.stockQuantity;
-      let effectivePrice = Number(product.price);
-      let effectiveTitle = product.title;
-
-      if (item.variantId && product.variants?.length > 0) {
-        const variant = product.variants.find((v: any) => v.id === item.variantId);
-        if (variant) {
-          effectiveStock = variant.stock;
-          if (variant.price) effectivePrice = Number(variant.price);
-          effectiveTitle = `${product.title} (${variant.title})`;
-        }
-      }
-
-      if (item.quantity > effectiveStock) {
-        return NextResponse.json(
-          {
-            error: `"${effectiveTitle}" is out of stock. Only ${effectiveStock} item(s) currently available.`,
-          },
-          { status: 400 }
+      const product = productMap.get(item.productId);
+      if (!product) {
+        return jsonError(
+          "One or more items in your bag are no longer available. Please refresh your cart.",
+          409
         );
       }
 
+      const variant = item.variantId
+        ? product.variants.find((candidate) => candidate.id === item.variantId)
+        : undefined;
+
+      if (item.variantId && !variant) {
+        return jsonError(
+          `The selected option for "${product.title}" is no longer available.`,
+          409
+        );
+      }
+
+      const effectivePrice =
+        variant?.price != null ? Number(variant.price) : Number(product.price);
+      const effectiveTitle = variant
+        ? `${product.title} (${variant.title})`
+        : product.title;
+      const effectiveWeight =
+        variant?.weightGrams ?? product.weightGrams ?? 150;
+
       const itemTotal = effectivePrice * item.quantity;
       subtotal += itemTotal;
-      totalWeightGrams += (product.weightGrams || 150) * item.quantity;
+      totalWeightGrams += effectiveWeight * item.quantity;
 
       orderItemsToCreate.push({
         productId: product.id,
@@ -115,106 +231,248 @@ export async function POST(request: NextRequest) {
         quantity: item.quantity,
         unitPrice: effectivePrice,
         totalPrice: itemTotal,
-        imageUrl: product.images?.[0]?.url || null,
+        imageUrl: product.images[0]?.url || null,
       });
     }
 
-    // 4. Calculate exact shipping fee from weight and pincode zone
     const { zone } = resolvePincodeZone(shippingAddress.pincode);
     const shippingFee = calculateShippingFee(totalWeightGrams, zone);
-    const totalAmount = subtotal + shippingFee;
+    const safeDiscount = Math.min(Number(discountAmount || 0), subtotal + shippingFee);
+    const totalAmount = Number((subtotal + shippingFee - safeDiscount).toFixed(2));
 
-    // 5. Generate human-readable Order Number: TBC-YYYYMM-XXXX
-    const datePrefix = new Date().toISOString().slice(0, 7).replace("-", "");
-    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-    const orderNumber = `TBC-${datePrefix}-${randomSuffix}`;
+    if (
+      expectedTotal !== undefined &&
+      Math.abs(expectedTotal - totalAmount) > 0.01
+    ) {
+      return jsonError(
+        "Your cart total changed before payment. Please review the updated amount and try again.",
+        409,
+        {
+          code: "TOTAL_CHANGED",
+          amount: totalAmount,
+          subtotal,
+          shippingFee,
+        }
+      );
+    }
 
-    // 6. Handle Payment Gateway or Direct UPI
+    for (const [productId, quantity] of requestedQuantities.entries()) {
+      const product = productMap.get(productId);
+      stockLines.push({
+        productId,
+        quantity,
+        title: product?.title || "Item",
+      });
+    }
+
+    const addressSnapshot = {
+      ...shippingAddress,
+      zone,
+    };
+
+    const customer = {
+      name: shippingAddress.fullName,
+      email: shippingAddress.email,
+      phone: shippingAddress.phone,
+    };
+
+    const clientIp = getClientIp(request);
+
+    // Fast idempotency path: a repeated submit with the same UTR should return
+    // the original order rather than reserving stock twice.
+    if (utr) {
+      const existingPayment = await prisma.payment.findUnique({
+        where: { gatewayPaymentId: utr },
+        include: { order: true },
+      });
+
+      if (existingPayment) {
+        if (existingPayment.status === "FAILED") {
+          return jsonError(
+            `This UTR was already submitted for order ${existingPayment.order.orderNumber}, which was not approved. Please contact support with your payment proof.`,
+            409
+          );
+        }
+
+        return buildOrderResponse({
+          order: existingPayment.order,
+          paymentMethod: existingPayment.order.paymentMethod,
+          paymentStatus: existingPayment.order.paymentStatus,
+          idempotent: true,
+          customer,
+        });
+      }
+    }
+
     let razorpayOrderId: string | null = null;
     if (paymentMethod === "RAZORPAY") {
       try {
         const razorpayOrder = await createRazorpayOrder({
           amountPaise: Math.round(totalAmount * 100),
           currency: "INR",
-          receipt: orderNumber,
+          receipt: crypto.randomUUID().slice(0, 30),
           notes: {
-            orderNumber,
             customerEmail: shippingAddress.email,
             customerPhone: shippingAddress.phone,
           },
         });
         razorpayOrderId = razorpayOrder.id;
-      } catch (rzpErr) {
-        console.warn("Razorpay order creation skipped/failed:", rzpErr);
-        razorpayOrderId = `order_mock_${Date.now()}`;
+      } catch (error) {
+        console.error("[RAZORPAY_ORDER_CREATE_ERROR]", error);
+        return jsonError(
+          "Could not start the online payment. Please try Direct UPI or retry in a moment.",
+          502
+        );
       }
     }
 
-    // 7. Atomic Transaction or simulated order
-    let createdOrderId = `order_${Date.now()}`;
-    try {
-      const createdOrder = await prisma.$transaction(async (tx) => {
-        const order = await tx.order.create({
-          data: {
-            orderNumber,
-            userId: session?.userId || null,
-            guestEmail: shippingAddress.email,
-            guestPhone: shippingAddress.phone,
-            shippingAddress: shippingAddress as unknown as object,
-            subtotal,
-            shippingFee,
-            totalWeightGrams,
-            totalAmount,
-            status: "PENDING_PAYMENT",
-            paymentStatus: "PENDING",
-            paymentMethod: paymentMethod || "DIRECT_UPI",
-            upiUtrNumber: upiUtrNumber || null,
-            upiScreenshotUrl: upiScreenshotUrl || null,
-            notes: notes || null,
-            items: {
-              create: orderItemsToCreate,
-            },
-            payment: {
-              create: {
-                gateway: paymentMethod || "DIRECT_UPI",
-                gatewayOrderId: razorpayOrderId || undefined,
-                gatewayPaymentId: upiUtrNumber || null,
-                amount: totalAmount,
-                currency: "INR",
-                status: "PENDING",
+    let lastError: unknown = null;
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const orderNumber = generateOrderNumber();
+
+      try {
+        const createdOrder = await prisma.$transaction(async (tx) => {
+          if (utr) {
+            const duplicate = await tx.payment.findUnique({
+              where: { gatewayPaymentId: utr },
+              select: { id: true },
+            });
+            if (duplicate) {
+              throw new DuplicateUtrError();
+            }
+          }
+
+          // Reserve inventory at the same moment the order is written.
+          await decrementStock(tx, stockLines);
+
+          const order = await tx.order.create({
+            data: {
+              orderNumber,
+              userId,
+              guestEmail: shippingAddress.email,
+              guestPhone: shippingAddress.phone,
+              shippingAddress: addressSnapshot as unknown as Prisma.InputJsonValue,
+              subtotal,
+              shippingFee,
+              discountAmount: safeDiscount,
+              totalWeightGrams,
+              totalAmount,
+              status: "PENDING_PAYMENT",
+              paymentStatus:
+                paymentMethod === "DIRECT_UPI"
+                  ? "PENDING_VERIFICATION"
+                  : "PENDING",
+              paymentMethod,
+              upiUtrNumber: utr,
+              upiScreenshotUrl: upiScreenshotUrl || null,
+              notes: notes || null,
+              items: {
+                create: orderItemsToCreate,
+              },
+              payment: {
+                create: {
+                  gateway: paymentMethod,
+                  gatewayOrderId: razorpayOrderId,
+                  gatewayPaymentId: utr,
+                  amount: totalAmount,
+                  currency: "INR",
+                  status:
+                    paymentMethod === "DIRECT_UPI"
+                      ? "PENDING_VERIFICATION"
+                      : "PENDING",
+                  payload: {
+                    stockReserved: true,
+                    submittedAt: new Date().toISOString(),
+                    submittedIp: clientIp,
+                    upiVpa: UPI_VPA,
+                  },
+                },
               },
             },
-          },
+          });
+
+          await tx.auditLog.create({
+            data: {
+              userId: userId || undefined,
+              action:
+                paymentMethod === "DIRECT_UPI"
+                  ? "UPI_PAYMENT_SUBMITTED"
+                  : "ORDER_CREATED",
+              resource: "ORDER",
+              ipAddress: clientIp,
+              details: {
+                orderNumber: order.orderNumber,
+                totalAmount,
+                paymentMethod,
+                ...(utr ? { utr } : {}),
+              },
+            },
+          });
+
+          return order;
         });
-        return order;
-      });
-      createdOrderId = createdOrder.id;
-    } catch (txErr) {
-      console.warn("DB transaction fallback in checkout order creation:", txErr);
+
+        return buildOrderResponse({
+          order: createdOrder,
+          paymentMethod,
+          paymentStatus: createdOrder.paymentStatus,
+          idempotent: false,
+          customer,
+          razorpay:
+            paymentMethod === "RAZORPAY" && razorpayOrderId
+              ? {
+                  orderId: razorpayOrderId,
+                  keyId: process.env.RAZORPAY_KEY_ID || "",
+                }
+              : undefined,
+        });
+      } catch (error) {
+        lastError = error;
+
+        if (isUniqueViolation(error, "orderNumber") && attempt < 2) {
+          continue;
+        }
+
+        if (
+          (error instanceof DuplicateUtrError ||
+            isUniqueViolation(error, "gatewayPaymentId")) &&
+          utr
+        ) {
+          const existingPayment = await prisma.payment.findUnique({
+            where: { gatewayPaymentId: utr },
+            include: { order: true },
+          });
+
+          if (existingPayment && existingPayment.status !== "FAILED") {
+            return buildOrderResponse({
+              order: existingPayment.order,
+              paymentMethod: existingPayment.order.paymentMethod,
+              paymentStatus: existingPayment.order.paymentStatus,
+              idempotent: true,
+              customer,
+            });
+          }
+        }
+
+        throw error;
+      }
     }
 
-    return NextResponse.json({
-      success: true,
-      orderId: createdOrderId,
-      orderNumber,
-      amount: totalAmount,
-      subtotal,
-      shippingFee,
-      currency: "INR",
-      paymentMethod: paymentMethod || "DIRECT_UPI",
-      razorpayOrderId,
-      razorpayKeyId: process.env.RAZORPAY_KEY_ID || "rzp_test_YourTestKeyId",
-      customer: {
-        name: shippingAddress.fullName,
-        email: shippingAddress.email,
-        phone: shippingAddress.phone,
-      },
-    });
+    throw lastError || new Error("Could not allocate an order number.");
   } catch (error) {
+    if (error instanceof OutOfStockError) {
+      return jsonError(error.message, 409, {
+        code: "OUT_OF_STOCK",
+        productTitle: error.productTitle,
+        available: error.available,
+      });
+    }
+
     console.error("[CREATE_CHECKOUT_ORDER_ERROR]", error);
-    return NextResponse.json(
-      { error: "Failed to initiate checkout order. Please try again." },
-      { status: 500 }
+    return jsonError(
+      "Failed to place your order. No payment has been confirmed. Please try again.",
+      500
     );
   }
 }

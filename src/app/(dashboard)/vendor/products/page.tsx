@@ -490,7 +490,7 @@ export default function VendorProductsPage() {
                   <div className="flex items-center gap-4 min-w-0 flex-1">
                     <div className="relative w-14 h-14 bg-neutral-100 rounded-xl overflow-hidden shrink-0">
                       <Image
-                        src={p.thumbnailUrl || "/placeholder.png"}
+                        src={p.thumbnailUrl || "/placeholder.svg"}
                         alt={p.title}
                         fill
                         className="object-cover"

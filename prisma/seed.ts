@@ -7,17 +7,26 @@ async function main() {
   console.log("🌱 Starting The Bling Corner database seeding...");
 
   // 1. Seed Super Admin (You)
-  const adminPasswordHash = await bcrypt.hash(
-    process.env.ADMIN_INITIAL_PASSWORD || "SecureBlingAdmin2026!",
-    12
-  );
+  // Never fall back to a known password: a seeded account with a public default
+  // password is an immediate takeover risk once the store is online.
+  const adminEmail = process.env.ADMIN_INITIAL_EMAIL?.trim();
+  const adminPassword = process.env.ADMIN_INITIAL_PASSWORD?.trim();
+
+  if (!adminEmail || !adminPassword || adminPassword.length < 12) {
+    throw new Error(
+      "Set ADMIN_INITIAL_EMAIL and ADMIN_INITIAL_PASSWORD (12+ characters) before seeding. Refusing to create a default-password admin."
+    );
+  }
+
+  const adminPasswordHash = await bcrypt.hash(adminPassword, 12);
 
   const admin = await prisma.user.upsert({
-    where: { email: "admin@theblingcorner.in" },
+    where: { email: adminEmail },
+    // Never overwrite an existing admin password on re-seed.
     update: { role: Role.SUPER_ADMIN },
     create: {
       name: "Master Admin",
-      email: "admin@theblingcorner.in",
+      email: adminEmail,
       passwordHash: adminPasswordHash,
       role: Role.SUPER_ADMIN,
     },
@@ -25,18 +34,28 @@ async function main() {
   console.log(`✅ Super Admin configured: ${admin.email}`);
 
   // 2. Seed Store Owner / Client (The Bling Corner Vendor)
-  const vendorPasswordHash = await bcrypt.hash("BlingStoreOwner2026!", 12);
-  const vendor = await prisma.user.upsert({
-    where: { email: "client@theblingcorner.in" },
-    update: { role: Role.VENDOR },
-    create: {
-      name: "The Bling Corner Store Owner",
-      email: "client@theblingcorner.in",
-      passwordHash: vendorPasswordHash,
-      role: Role.VENDOR,
-    },
-  });
-  console.log(`✅ Store Owner configured: ${vendor.email}`);
+  // Optional, but must be explicitly provided rather than hardcoded.
+  const vendorEmail = process.env.VENDOR_INITIAL_EMAIL?.trim();
+  const vendorPassword = process.env.VENDOR_INITIAL_PASSWORD?.trim();
+
+  if (vendorEmail && vendorPassword && vendorPassword.length >= 12) {
+    const vendorPasswordHash = await bcrypt.hash(vendorPassword, 12);
+    const vendor = await prisma.user.upsert({
+      where: { email: vendorEmail },
+      update: { role: Role.VENDOR },
+      create: {
+        name: "The Bling Corner Store Owner",
+        email: vendorEmail,
+        passwordHash: vendorPasswordHash,
+        role: Role.VENDOR,
+      },
+    });
+    console.log(`✅ Store Owner configured: ${vendor.email}`);
+  } else {
+    console.log(
+      "ℹ️ Skipping vendor seed. Set VENDOR_INITIAL_EMAIL and VENDOR_INITIAL_PASSWORD (12+ chars) to create one."
+    );
+  }
 
   // 3. Seed Product Categories (from client inventory screenshot)
   const categoriesData = [

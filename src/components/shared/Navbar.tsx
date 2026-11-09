@@ -3,9 +3,10 @@
 import * as React from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { Sparkles, ShoppingBag, User, Search, Menu, X, LogOut, Shield } from "lucide-react";
+import { Sparkles, ShoppingBag, User, Search, Menu, X, LogOut, Shield, Heart } from "lucide-react";
 import { GoogleIcon } from "@/components/ui/icons";
 import { useCart } from "@/context/CartContext";
+import { useWishlist } from "@/context/WishlistContext";
 
 interface NavbarProps {
   cartItemCount?: number;
@@ -22,6 +23,8 @@ interface UserSession {
 
 export function Navbar({ cartItemCount: propCount, onOpenCart: propOpen }: NavbarProps) {
   const { itemCount: contextCount, openCart: contextOpen } = useCart();
+  const { items: wishlistItems } = useWishlist();
+  const wishlistCount = wishlistItems?.length || 0;
   const cartItemCount = propCount !== undefined ? propCount : contextCount;
   const onOpenCart = propOpen !== undefined ? propOpen : contextOpen;
   const [isMobileMenuOpen, setIsMobileMenuOpen] = React.useState(false);
@@ -86,7 +89,7 @@ export function Navbar({ cartItemCount: propCount, onOpenCart: propOpen }: Navba
             >
               {isMobileMenuOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
             </button>
-            <Link href="/catalog" className="p-2 text-neutral-700 hover:text-neutral-900 ml-1">
+            <Link href="/search" className="p-2 text-neutral-700 hover:text-neutral-900 ml-1" aria-label="Search">
               <Search className="h-5 w-5" />
             </Link>
           </div>
@@ -125,7 +128,7 @@ export function Navbar({ cartItemCount: propCount, onOpenCart: propOpen }: Navba
           {/* Right Action Icons & Login */}
           <div className="flex items-center space-x-2 sm:space-x-3">
             <Link
-              href="/catalog"
+              href="/search"
               className="hidden lg:flex p-2 text-neutral-600 hover:text-neutral-900"
               aria-label="Search items"
             >
@@ -189,11 +192,19 @@ export function Navbar({ cartItemCount: propCount, onOpenCart: propOpen }: Navba
                     )}
 
                     <Link
+                      href="/account"
+                      onClick={() => setIsUserMenuOpen(false)}
+                      className="flex items-center gap-2 px-3 py-2 text-xs text-neutral-700 hover:bg-neutral-50"
+                    >
+                      <User className="w-3.5 h-3.5 text-rose-800" /> My Account & Orders
+                    </Link>
+
+                    <Link
                       href="/track-order"
                       onClick={() => setIsUserMenuOpen(false)}
                       className="flex items-center gap-2 px-3 py-2 text-xs text-neutral-700 hover:bg-neutral-50"
                     >
-                      <User className="w-3.5 h-3.5" /> My Orders & Tracking
+                      <User className="w-3.5 h-3.5" /> Track Any Parcel
                     </Link>
 
                     <button
@@ -216,6 +227,21 @@ export function Navbar({ cartItemCount: propCount, onOpenCart: propOpen }: Navba
                 <span className="sm:hidden text-[11px]">Sign In</span>
               </Link>
             )}
+
+            {/* Wishlist Link */}
+            <Link
+              href="/wishlist"
+              className="relative p-2 text-neutral-700 hover:text-rose-900 transition-colors"
+              aria-label="Wishlist"
+              title="Saved Wishlist"
+            >
+              <Heart className="h-5 w-5 sm:h-5.5 sm:w-5.5" />
+              {wishlistCount > 0 && (
+                <span className="absolute top-1 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-rose-600 text-[9px] font-bold text-white shadow-2xs">
+                  {wishlistCount > 9 ? "9+" : wishlistCount}
+                </span>
+              )}
+            </Link>
 
             {/* Shopping Bag Icon */}
             <button
@@ -280,7 +306,12 @@ export function Navbar({ cartItemCount: propCount, onOpenCart: propOpen }: Navba
             </Link>
           ))}
           <div className="pt-2 border-t border-neutral-100 flex items-center justify-between text-xs text-neutral-500">
-            <Link href="/track-order" onClick={() => setIsMobileMenuOpen(false)} className="text-rose-900 font-semibold">
+            {currentUser ? (
+              <Link href="/account" onClick={() => setIsMobileMenuOpen(false)} className="text-rose-900 font-semibold">
+                My Account
+              </Link>
+            ) : null}
+            <Link href="/track-order" onClick={() => setIsMobileMenuOpen(false)} className="text-neutral-700 font-semibold hover:text-rose-900">
               Track Order
             </Link>
             <Link href="https://www.instagram.com/theblingcorner_" target="_blank" rel="noopener noreferrer" className="text-rose-900 font-medium">

@@ -1,5 +1,5 @@
 /**
- * Uploads a product image directly to Cloudinary (with fallback to Supabase Storage)
+ * Uploads a product image directly to Cloudinary (with fallback to Supabase Storage).
  * 100% Free Tier ($0 / Zero Billing), No credit card required.
  */
 export async function uploadProductImage(file: File): Promise<string> {
@@ -18,37 +18,43 @@ export async function uploadProductImage(file: File): Promise<string> {
       if (data.url) return data.url;
     }
   } catch (err) {
-    console.warn("Cloudinary upload failed, trying Supabase storage fallback:", err);
+    console.warn(
+      "Cloudinary upload failed, trying Supabase storage fallback:",
+      err
+    );
   }
 
   // 2. Fallback to Supabase Storage
-  const supabaseUrl =
-    process.env.NEXT_PUBLIC_SUPABASE_URL || "https://ptpywwirakaikotcmkkj.supabase.co";
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
   const apiKey =
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
-    "sb_publishable_JV7u60mOCz7TpFls-Gik7A_Xggn1X1S";
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim() ||
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim();
+
+  if (!supabaseUrl || !apiKey) {
+    throw new Error(
+      "Image upload is unavailable. Configure Cloudinary or Supabase Storage."
+    );
+  }
 
   const fileExt = file.name.split(".").pop() || "jpg";
-  const cleanExt = fileExt.toLowerCase();
-  const fileName = `${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${cleanExt}`;
+  const fileName = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}.${fileExt}`;
+  const uploadUrl = `${supabaseUrl.replace(/\/$/, "")}/storage/v1/object/product-images/${fileName}`;
 
-  const uploadEndpoint = `${supabaseUrl}/storage/v1/object/products/${fileName}`;
-
-  const res = await fetch(uploadEndpoint, {
+  const res = await fetch(uploadUrl, {
     method: "POST",
     headers: {
-      apikey: apiKey,
       Authorization: `Bearer ${apiKey}`,
-      "Content-Type": file.type || "image/jpeg",
+      apikey: apiKey,
+      "x-upsert": "true",
+      "Content-Type": file.type || "application/octet-stream",
     },
     body: file,
   });
 
   if (!res.ok) {
-    const errorData = await res.json().catch(() => null);
-    throw new Error(errorData?.message || "Failed to upload image to cloud storage.");
+    const message = await res.text().catch(() => "");
+    throw new Error(message || "Failed to upload image.");
   }
 
-  return `${supabaseUrl}/storage/v1/object/public/products/${fileName}`;
+  return `${supabaseUrl.replace(/\/$/, "")}/storage/v1/object/public/product-images/${fileName}`;
 }

@@ -5,7 +5,8 @@ import Link from "next/link";
 import Image from "next/image";
 import { formatPrice } from "@/lib/utils";
 import { useCart } from "@/context/CartContext";
-import { ShoppingBag, Sparkles } from "lucide-react";
+import { ShoppingBag, Sparkles, Heart } from "lucide-react";
+import { useWishlist } from "@/context/WishlistContext";
 
 export interface ProductCardProps {
   product: {
@@ -24,6 +25,8 @@ export interface ProductCardProps {
 
 export function ProductCard({ product, onAddToCart }: ProductCardProps) {
   const { addItem } = useCart();
+  const { isInWishlist, toggleWishlist } = useWishlist();
+  const isWishlisted = isInWishlist(product.id);
   const price = typeof product.price === "string" ? parseFloat(product.price) : product.price;
   const comparePrice = product.comparePrice
     ? typeof product.comparePrice === "string"
@@ -38,7 +41,7 @@ export function ProductCard({ product, onAddToCart }: ProductCardProps) {
 
   const isOutOfStock = product.stockQuantity <= 0;
   const isLowStock = !isOutOfStock && product.stockQuantity <= 3;
-  const imageUrl = product.images?.[0]?.url || "/images/placeholder.jpg";
+  const imageUrl = product.images?.[0]?.url || "/placeholder.svg";
 
   return (
     <div className="group relative flex flex-col bg-white rounded-2xl border border-neutral-200/80 overflow-hidden hover:shadow-md transition-all duration-300">
@@ -62,7 +65,7 @@ export function ProductCard({ product, onAddToCart }: ProductCardProps) {
         )}
 
         {/* Badges */}
-        <div className="absolute top-2 left-2 flex flex-col gap-1">
+        <div className="absolute top-2 left-2 flex flex-col gap-1 z-10">
           {discountPercent && (
             <span className="rounded-full bg-rose-900 px-2 py-0.5 text-[10px] font-bold text-white shadow-sm">
               {discountPercent}% OFF
@@ -74,6 +77,36 @@ export function ProductCard({ product, onAddToCart }: ProductCardProps) {
             </span>
           )}
         </div>
+
+        {/* Wishlist Button */}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            toggleWishlist({
+              id: product.id,
+              title: product.title,
+              slug: product.slug,
+              price,
+              imageUrl,
+              weightGrams: product.weightGrams ?? 150,
+              stockQuantity: product.stockQuantity,
+            });
+          }}
+          className={`absolute top-2 right-2 z-20 h-7 w-7 rounded-full flex items-center justify-center transition-all shadow-xs ${
+            isWishlisted
+              ? "bg-rose-50 text-rose-600 scale-105"
+              : "bg-white/80 hover:bg-white text-neutral-600 hover:text-rose-600 backdrop-blur-xs"
+          }`}
+          aria-label={isWishlisted ? "Remove from Wishlist" : "Save to Wishlist"}
+        >
+          <Heart
+            className={`h-3.5 w-3.5 transition-transform active:scale-125 ${
+              isWishlisted ? "fill-rose-600" : ""
+            }`}
+          />
+        </button>
 
         {/* Out of Stock Overlay */}
         {isOutOfStock && (

@@ -119,7 +119,7 @@ function ProductDetailContent() {
 
   const isOutOfStock = product.stockQuantity <= 0;
   const isLowStock = !isOutOfStock && product.stockQuantity <= 3;
-  const images = product.images.length > 0 ? product.images : [{ url: "/images/placeholder.jpg" }];
+  const images = product.images.length > 0 ? product.images : [{ url: "/placeholder.svg" }];
 
   const handleAddToCart = () => {
     const selectedVariant = product.variants?.find((v) => v.id === selectedVariantId);
@@ -169,7 +169,7 @@ function ProductDetailContent() {
         <div className="space-y-4">
           <div className="relative aspect-square w-full rounded-2xl overflow-hidden bg-white border border-neutral-200/80 shadow-sm">
             <Image
-              src={images[activeImageIndex]?.url || "/images/placeholder.jpg"}
+              src={images[activeImageIndex]?.url || "/placeholder.svg"}
               alt={product.title}
               fill
               priority

@@ -1,62 +1,48 @@
 import { NextRequest, NextResponse } from "next/server";
-import cloudinary from "@/lib/cloudinary";
 import { getSession } from "@/lib/auth/session";
 import { hasRole } from "@/lib/auth/rbac";
+import { jsonError, rejectCrossOrigin } from "@/lib/http";
+import {
+  ImageUploadError,
+  uploadImage,
+} from "@/lib/cloudinary-upload";
+
+const MAX_PRODUCT_IMAGE_BYTES = 5 * 1024 * 1024;
 
 export async function POST(request: NextRequest) {
+  const crossOrigin = rejectCrossOrigin(request);
+  if (crossOrigin) return crossOrigin;
+
   try {
     const session = await getSession();
     if (!session || !hasRole(session.role, ["VENDOR", "SUPER_ADMIN"])) {
-      return NextResponse.json(
-        { error: "Unauthorized. Store owner or admin access required." },
-        { status: 401 }
+      return jsonError(
+        "Unauthorized. Store owner or admin access required.",
+        401
       );
     }
 
     const formData = await request.formData();
-    const file = formData.get("file") as File | null;
+    const file = formData.get("file");
 
-    if (!file) {
-      return NextResponse.json({ error: "No image file provided." }, { status: 400 });
+    if (!(file instanceof File)) {
+      return jsonError("No image file provided.", 400);
     }
 
-    // Convert file to buffer
-    const arrayBuffer = await file.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-
-    // Upload to Cloudinary with automatic WebP conversion and mobile compression
-    const uploadResult = await new Promise<any>((resolve, reject) => {
-      const uploadStream = cloudinary.uploader.upload_stream(
-        {
-          folder: "theblingcorner/products",
-          resource_type: "image",
-          transformation: [
-            { quality: "auto:good" },
-            { fetch_format: "auto" },
-          ],
-        },
-        (error, result) => {
-          if (error) reject(error);
-          else resolve(result);
-        }
-      );
-      uploadStream.end(buffer);
+    const uploaded = await uploadImage(file, {
+      folder: "theblingcorner/products",
+      maxBytes: MAX_PRODUCT_IMAGE_BYTES,
     });
 
     return NextResponse.json({
       success: true,
-      url: uploadResult.secure_url,
-      publicId: uploadResult.public_id,
-      format: uploadResult.format,
-      width: uploadResult.width,
-      height: uploadResult.height,
+      ...uploaded,
     });
-  } catch (error: any) {
+  } catch (error) {
+    if (error instanceof ImageUploadError) {
+      return jsonError(error.message, error.status);
+    }
     console.error("[CLOUDINARY_UPLOAD_ERROR]", error);
-    return NextResponse.json(
-      { error: error?.message || "Failed to upload image to Cloudinary." },
-      { status: 500 }
-    );
+    return jsonError("Failed to upload image.", 500);
   }
 }
-

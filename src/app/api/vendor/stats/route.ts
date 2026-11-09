@@ -6,66 +6,71 @@ export async function GET() {
   try {
     const session = await getSession();
     if (!session || (session.role !== "VENDOR" && session.role !== "SUPER_ADMIN")) {
-      return NextResponse.json({ error: "Unauthorized access." }, { status: 403 });
+      return NextResponse.json(
+        { error: "Unauthorized access." },
+        { status: 403 }
+      );
     }
 
-    try {
-      const [totalOrders, orders, products] = await Promise.all([
-        prisma.order.count(),
-        prisma.order.findMany({
-          select: {
-            totalAmount: true,
-            status: true,
-          },
-        }),
-        prisma.product.findMany({
-          select: {
-            id: true,
-            stockQuantity: true,
-            title: true,
-          },
-        }),
-      ]);
-
-      const totalRevenue = orders
-        .filter((o) => o.status !== "CANCELLED" && o.status !== "PENDING_PAYMENT")
-        .reduce((acc, curr) => acc + Number(curr.totalAmount), 0);
-
-      const pendingOrders = orders.filter(
-        (o) => o.status === "PAID" || o.status === "PROCESSING"
-      ).length;
-
-      const lowStockProducts = products.filter(
-        (p) => p.stockQuantity <= 5 && p.stockQuantity > 0
-      ).length;
-      const outOfStockProducts = products.filter((p) => p.stockQuantity === 0).length;
-
-      return NextResponse.json({
-        stats: {
-          totalRevenue,
-          totalOrders,
-          pendingOrders,
-          lowStockProducts,
-          outOfStockProducts,
-          totalProducts: products.length,
+    const [totalOrders, orders, products] = await Promise.all([
+      prisma.order.count(),
+      prisma.order.findMany({
+        select: {
+          totalAmount: true,
+          status: true,
+          paymentStatus: true,
         },
-      });
-    } catch (dbErr) {
-      console.warn("DB stats fetch fallback:", dbErr);
-      // Simulated stats fallback for dev test mode
-      return NextResponse.json({
-        stats: {
-          totalRevenue: 14850,
-          totalOrders: 28,
-          pendingOrders: 4,
-          lowStockProducts: 3,
-          outOfStockProducts: 1,
-          totalProducts: 18,
+      }),
+      prisma.product.findMany({
+        select: {
+          id: true,
+          stockQuantity: true,
+          title: true,
         },
-      });
-    }
+      }),
+    ]);
+
+    const totalRevenue = orders
+      .filter(
+        (order) =>
+          order.status !== "CANCELLED" &&
+          order.status !== "PENDING_PAYMENT" &&
+          order.status !== "REFUNDED" &&
+          order.paymentStatus === "SUCCESS"
+      )
+      .reduce((acc, curr) => acc + Number(curr.totalAmount), 0);
+
+    const pendingOrders = orders.filter(
+      (order) => order.status === "PAID" || order.status === "PROCESSING"
+    ).length;
+
+    const awaitingPayment = orders.filter(
+      (order) => order.paymentStatus === "PENDING_VERIFICATION"
+    ).length;
+
+    const lowStockProducts = products.filter(
+      (p) => p.stockQuantity <= 5 && p.stockQuantity > 0
+    ).length;
+    const outOfStockProducts = products.filter(
+      (p) => p.stockQuantity === 0
+    ).length;
+
+    return NextResponse.json({
+      stats: {
+        totalRevenue,
+        totalOrders,
+        pendingOrders,
+        awaitingPayment,
+        lowStockProducts,
+        outOfStockProducts,
+        totalProducts: products.length,
+      },
+    });
   } catch (error) {
     console.error("[VENDOR_STATS_ERROR]", error);
-    return NextResponse.json({ error: "Failed to load vendor stats." }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to load vendor stats." },
+      { status: 500 }
+    );
   }
 }

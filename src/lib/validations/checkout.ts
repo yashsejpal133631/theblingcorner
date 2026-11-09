@@ -41,6 +41,14 @@ export const checkoutOrderSchema = z.object({
     .min(1, { message: "Your cart is empty. Please add items to checkout." }),
   shippingAddress: shippingAddressSchema,
   paymentMethod: z.enum(["DIRECT_UPI", "RAZORPAY"]).default("DIRECT_UPI"),
+  /**
+   * Total the customer saw in the cart before paying. The server recomputes the
+   * amount from the database and rejects the order when the two differ, so a
+   * stale cart cannot result in paying the wrong amount.
+   */
+  expectedTotal: z.number().finite().nonnegative().optional(),
+  discountAmount: z.number().finite().nonnegative().optional(),
+  couponCode: z.string().trim().max(30).optional().or(z.literal("")),
   upiUtrNumber: z
     .string()
     .trim()
