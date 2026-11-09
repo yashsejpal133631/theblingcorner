@@ -4,6 +4,7 @@
 > **Audited on:** 8 Nov 2026
 > **Audited against:** current `src/`, `prisma/schema.prisma`, `prisma/seed.ts`, `package.json`
 > **How to use:** Do not try to build everything at once. Work top-to-bottom. `P0` items must be fixed before taking real orders.
+> **How this file is organised:** Sections 0–16 are the audit of what is missing or broken. Sections 17–22 are the complete build inventories: every page, every button/control, every service, every business function, the full sitemap, and the phase gates.
 
 **Priority legend**
 
@@ -18,6 +19,21 @@
 - `[ ]` Not started
 - `[~]` Partially exists
 - `[x]` Done
+
+**Top 10 launch blockers (fix in this order)**
+
+| # | Blocker | Section |
+| :-- | :--- | :--- |
+| 1 | Remove every fake/fallback success path (orders, payments, products, reviews, users) | 1.1 |
+| 2 | Verify Direct UPI UTRs server-side + build the admin approval queue | 1.8 |
+| 3 | Atomic stock decrement and restock (no oversell, no negative stock) | 1.2 |
+| 4 | Bind payment verification to the DB order, amount, and status | 1.3 |
+| 5 | Remove hardcoded secrets and default logins; rotate exposed keys | 1.4 |
+| 6 | Add rate limits, CSRF checks, CSP/security headers, upload limits | 1.5, 1.6 |
+| 7 | Stop public order lookup by order number only; use phone/token | 1.5 |
+| 8 | Build the customer account area + password reset + email verification | 2.1 |
+| 9 | Publish legal pages, contact details, and business information | 2.6, 9 |
+| 10 | Add order emails/WhatsApp, invoices, and a real success page | 2.5, 8 |
 
 ---
 
@@ -260,6 +276,56 @@
 
 - [ ] **No metadata base / canonical / OG images**
   - Add `metadataBase` in `src/app/layout.tsx`.
+
+### 1.8 P0 — Direct UPI payment flow is unverified (the flow actually used by checkout)
+
+> `src/app/(store)/checkout/page.tsx` does **not** open Razorpay. It creates an order with `paymentMethod: "DIRECT_UPI"`, shows a static UPI ID/QR, asks the customer to type a UTR and optionally upload a screenshot, then redirects to a success page that says the order is confirmed. There is no server-side verification of the UTR anywhere. This must be fixed before taking real orders.
+
+- [ ] **Add a real UTR verification queue**
+  - `POST /api/checkout/create-order` stores `upiUtrNumber` / `upiScreenshotUrl` and leaves the order `PENDING_PAYMENT`.
+  - Nothing ever checks whether that UTR exists, belongs to the store, or matches the amount.
+  - **Build:** `GET /api/admin/payments/pending`, `POST /api/admin/payments/[id]/verify`, `POST /api/admin/payments/[id]/reject` with audit log.
+  - Add an `/admin/payments` screen showing order number, amount, UTR, payer name, screenshot, age, and Approve/Reject buttons.
+
+- [ ] **Make UTR unique and validated**
+  - Add a unique index on the UTR (per gateway) so the same UTR cannot be submitted for two orders.
+  - Validate format (typically 12 digits), payment date, amount, and paying UPI ID.
+  - Store `payerUpiId`, `paidAt`, `verifiedById`, `verifiedAt`, `rejectionReason`.
+
+- [ ] **Use `PENDING_VERIFICATION` honestly**
+  - The `PaymentStatus` enum already has `PENDING_VERIFICATION`; set it when the customer submits a UTR.
+  - Only move the order to `PAID` after an admin/bank match, and only then decrement stock — in one transaction.
+
+- [ ] **Fix the misleading success page**
+  - `src/app/(store)/checkout/success/page.tsx` currently renders "Payment Verified & Order Confirmed" purely from the URL.
+  - Fetch the real order and show one of: `Awaiting payment`, `Payment under review`, `Payment verified`, `Payment rejected`.
+  - Do not call it confirmed while `paymentStatus` is `PENDING` / `PENDING_VERIFICATION`.
+
+- [ ] **Stop fake-confirming unpaid orders**
+  - `GET /api/orders/[orderNumber]` still returns a hardcoded `PAID` order for any `TBC-*` number. Remove that before UPI verification goes live.
+
+- [ ] **Handle abandoned / unpaid orders**
+  - Add `expiresAt` (e.g. 24 hours) to unpaid orders.
+  - Cron job: cancel expired unpaid orders, release reservations, notify the customer.
+  - Show "Payment pending" in the customer account and vendor order list.
+
+- [ ] **Protect payment proof uploads**
+  - Screenshots can contain names, UTRs, and bank details. Store them privately (signed URLs), not in a public bucket.
+  - Limit size/type (see 1.6) and delete/expire proofs after the dispute window.
+
+- [ ] **Reconcile against the bank, not the customer's word**
+  - Best: import the bank/UPI statement CSV daily and auto-match by UTR + amount + date.
+  - Good: admin manually checks the statement and clicks Approve.
+  - Never approve based only on a screenshot.
+
+- [ ] **Decide the long-term payment architecture**
+  - Option A (recommended): Razorpay/PhonePe dynamic QR or hosted checkout with webhook → automatic `PAID`, no manual queue.
+  - Option B: keep Direct UPI but build the full manual verification workflow above.
+  - Do not ship the current half-manual, half-automatic mix.
+
+- [ ] **Add customer-visible payment status + notifications**
+  - Email/WhatsApp: "Payment received, verifying", "Payment verified", "Payment could not be matched — please re-submit".
+  - Show the same status on `/track-order` and `/account/orders`.
 
 ---
 
@@ -1232,7 +1298,7 @@ Use this before telling the client the store is live.
 
 | File | Issue |
 | :--- | :--- |
-| `src/app/api/checkout/create-order/route.ts` | Fallback products, fake order success, no stock reserve, no idempotency, weak order number |
+| `src/app/api/checkout/create-order/route.ts` | Fallback products, fake order success, no stock reserve, no idempotency, weak order number, stores UTR/screenshot but never verifies them |
 | `src/app/api/payments/verify/route.ts` | Returns success when order not found; not bound to DB amount/order |
 | `src/app/api/payments/webhook/route.ts` | Optional secret, possible `timingSafeEqual` crash, limited events |
 | `src/app/api/orders/[orderNumber]/route.ts` | Public data leak, fake `TBC-*` orders, arbitrary status jumps, fake fallback success |
@@ -1251,10 +1317,11 @@ Use this before telling the client the store is live.
 | `src/lib/shipping.ts` | Hardcoded rates; DB `ShippingRateRule` unused; origin hardcoded |
 | `src/app/(store)/catalog/page.tsx` | No pagination; only first 12 products |
 | `src/app/(store)/product/[slug]/page.tsx` | Client-rendered (no SEO); no Buy Now; no delivery estimator |
-| `src/app/(store)/checkout/success/page.tsx` | Only shows order number from URL, no real receipt |
+| `src/app/(store)/checkout/success/page.tsx` | Only shows order number from URL, no real receipt; says "confirmed" before payment is verified |
+| `src/app/(store)/checkout/page.tsx` | Direct UPI only (Razorpay not wired in UI); UTR/screenshot collected but never verified; no coupon, terms checkbox, saved address, or retry flow |
 | `src/app/(dashboard)/vendor/products/page.tsx` | `thumbnailUrl` mismatch; no delete/archive UI; no variant/multi-image UI |
 | `src/app/(dashboard)/vendor/orders/page.tsx` | No order detail page, invoice, refund, pagination, date filter |
-| `src/app/(dashboard)/admin/page.tsx` | Only users + audit; no analytics/orders/settings |
+| `src/app/(dashboard)/admin/page.tsx` | Only users + audit; no analytics/orders/settings, and no Direct UPI verification queue |
 | `src/components/checkout/DeliveryEstimator.tsx` | Built but never used |
 | `prisma/schema.prisma` | Missing coupons, wishlist, cart, status history, refunds, returns, shipment, settings, banners, email logs, stock movements, review images, Q&A |
 | `prisma/seed.ts` | Default vendor password, no admin user password env for vendor |
@@ -1265,10 +1332,797 @@ Use this before telling the client the store is live.
 
 ## 16. Notes
 
-- `src/app/api/upload/route.ts` and `src/lib/cloudinary.ts` are currently modified in git working tree (your recent Cloudinary work). The audit above does not overwrite them.
+- At audit time, `src/app/api/upload/route.ts` and `src/lib/cloudinary.ts` had uncommitted changes. Re-check `git status` before editing them; do not discard the user's work.
 - `PROJECT_PLAN.md` and `README.md` claim several features that are not actually implemented (admin analytics, settings, overrides, vendor shipping page, `GET /api/orders/user`, `GET /api/admin/orders`, `GET /api/admin/analytics`, `POST /api/admin/settings`, NextAuth). Treat the README as a wishlist, not as truth.
 - The store is visually good and the core flow exists, but the payment/stock fallbacks are the reason it is **not safe to take real orders yet**.
 - When you start Phase 0, create a branch such as `fix/launch-blockers` and do not mix it with UI work.
+
+---
+
+## 17. Complete Page Inventory (every route, existing + missing)
+
+**Legend:** `✅` built and acceptable · `⚠️` built but incomplete · `❌` missing
+
+> Use this as the master page list. A page is only "done" when its row here is `✅`, its buttons in Section 18 work, and its APIs exist in Section 5.
+
+### 17.1 Public storefront pages
+
+| Route | Status | Priority | The page must contain | Primary actions |
+| :--- | :--- | :--- | :--- | :--- |
+| `/` | ⚠️ | P1 | Server-rendered hero, announcement bar, category tiles, featured products, best sellers, new arrivals, trust badges, testimonials, Instagram/UGC strip, newsletter signup, SEO metadata + JSON-LD | Shop Now, Browse Category, Add to Cart, View All, Subscribe |
+| `/catalog` | ⚠️ | P1 | Product grid, search, category filter, price filter, availability filter, rating filter, sort, result count, pagination/load-more, breadcrumb, SEO copy | Filter, Sort, Clear Filters, Load More, Add to Cart |
+| `/search` | ❌ | P1 | Query input, suggestions, results count, same filters as catalog, "no results" suggestions, popular searches | Search, Filter, Add to Cart |
+| `/product/[slug]` | ⚠️ | P1 | Gallery + zoom, title, price, variant selector, stock, quantity, Add to Bag, Buy Now, wishlist, share, delivery estimator, description, specs, size/care, reviews summary, review list, review form, Q&A, related products, recently viewed, breadcrumb, JSON-LD | Variant, Qty, Add to Cart, Buy Now, Wishlist, Share, Review, Ask, Notify Me |
+| `/collections` | ❌ | P2 | Curated collection list with cover images and descriptions | Open Collection |
+| `/collections/[slug]` | ❌ | P2 | Collection hero, product grid, filters, SEO metadata | Filter, Add to Cart |
+| `/category/[slug]` | ❌ | P2 | SEO landing page per category (canonical, intro copy, FAQ, product grid) | Filter, Add to Cart |
+| `/cart` | ⚠️ | P1 | Items, thumbnails, variant, qty +/-, remove, clear bag, subtotal, weight, coupon, shipping estimate, save for later, cross-sell, trust badges | Update Qty, Remove, Apply Coupon, Checkout |
+| `/checkout` | ⚠️ | P0 | Guest/login, contact, shipping address, pincode serviceability, shipping fee, order summary, coupon, gift wrap, order notes, terms checkbox, Direct UPI block **or** Razorpay, payment proof, Pay button | Apply Coupon, Pay, Copy UPI ID, Open UPI App, Upload Proof, Place Order |
+| `/checkout/success` | ⚠️ | P0 | Real order number, real payment status, amount, items, delivery estimate, next steps, invoice download, track link | Track Order, Download Invoice, Continue Shopping |
+| `/checkout/failure` | ❌ | P1 | Failure reason, retry payment, change method, contact support | Retry Payment, Contact Support |
+| `/track-order` | ⚠️ | P1 | Order number + phone/email lookup, status timeline, items, AWB + courier link, address, invoice, cancel/return request | Look Up, Copy AWB, Open Courier, Cancel, Return |
+| `/wishlist` | ❌ | P1 | Saved products, move to cart, remove, share wishlist | Move to Cart, Remove, Share |
+| `/about` | ❌ | P1 | Brand story, photos, founder note, values, CTA | Shop, Contact |
+| `/contact` | ❌ | P1 | Form, email, phone, WhatsApp, Instagram, address, support hours, map optional | Send Message, WhatsApp, Call |
+| `/faq` | ❌ | P1 | Searchable FAQ, categories (orders, shipping, returns, payments, products), contact CTA | Search FAQ, Contact |
+| `/shipping-policy` | ❌ | P0 | Zones, rates, dispatch time, delivery estimates, tracking, delays | Contact Support |
+| `/return-refund-policy` | ❌ | P0 | Eligibility, window, exclusions (hygiene/earrings), process, refund timeline | Start Return |
+| `/privacy-policy` | ❌ | P0 | Data collected, purpose, retention, sharing, cookies, rights, grievance officer | Request Data / Delete |
+| `/terms-and-conditions` | ❌ | P0 | Eligibility, orders, pricing, payment, shipping, returns, IP, liability, disputes | — |
+| `/cookie-policy` | ❌ | P1 | Cookie types, consent, opt-out | Cookie Preferences |
+| `/size-guide` | ❌ | P2 | Bracelet/ring sizes, measuring guide, chart | — |
+| `/care-guide` | ❌ | P2 | Jewelry care, storage, allergy notes | — |
+| `/blog` | ❌ | P2 | Journal list, categories, SEO | Read |
+| `/blog/[slug]` | ❌ | P2 | Article, author, related posts, JSON-LD | Share |
+| `/gift-cards` | ❌ | P2 | Denominations, buy, redeem, balance check | Buy, Redeem |
+| `/reviews` | ❌ | P2 | All customer reviews, photos, filters | Filter |
+| `/order/[token]` | ❌ | P1 | Guest order view via signed token sent by email/WhatsApp (no public order-number lookup) | Track, Invoice |
+
+### 17.2 Auth and customer account pages
+
+| Route | Status | Priority | The page must contain | Primary actions |
+| :--- | :--- | :--- | :--- | :--- |
+| `/login` | ⚠️ | P1 | Email/password, show password, remember me, forgot link, register link, rate limit, error states, redirect param | Login, Forgot, Register |
+| `/register` | ⚠️ | P1 | Name, email, phone, password + strength, terms checkbox, verification notice | Register |
+| `/forgot-password` | ❌ | P1 | Email form, neutral response (no account enumeration) | Send Reset Link |
+| `/reset-password` | ❌ | P1 | Token validation, new password + confirm, strength, success state | Reset Password |
+| `/verify-email` | ❌ | P1 | Token verification, resend, success/failure | Verify, Resend |
+| `/account` | ❌ | P1 | Profile summary, recent orders, default address, wishlist count, support card | View Orders, Edit Profile |
+| `/account/orders` | ❌ | P1 | Order list with status, date, total, filters, pagination, reorder | View, Reorder, Invoice |
+| `/account/orders/[orderNumber]` | ❌ | P1 | Items, timeline, payment status, address, AWB, invoice, cancel/return | Download Invoice, Cancel, Return |
+| `/account/addresses` | ❌ | P1 | Address cards, add/edit/delete, set default | Add, Edit, Delete, Set Default |
+| `/account/profile` | ❌ | P1 | Name, phone, email (verified), DOB optional | Save |
+| `/account/security` | ❌ | P1 | Change password, active sessions, logout all | Change Password, Logout All |
+| `/account/wishlist` | ❌ | P1 | Saved items, move to cart, remove | Move to Cart, Remove |
+| `/account/returns` | ❌ | P1 | Return/exchange requests and status | Start Return, Track |
+| `/account/notifications` | ❌ | P2 | Email/WhatsApp preferences | Save Preferences |
+| `/account/delete` | ❌ | P1 | Data export request, delete account with confirmation and retention notes | Export, Delete |
+
+### 17.3 Cart, checkout and order pages (supporting)
+
+| Route | Status | Priority | The page must contain | Primary actions |
+| :--- | :--- | :--- | :--- | :--- |
+| `/checkout/address` | ❌ | P2 | Optional multi-step split if checkout grows | Continue |
+| `/checkout/payment` | ❌ | P2 | Optional multi-step split | Pay |
+| `/invoice/[orderNumber]` | ❌ | P1 | Printable GST invoice / receipt (auth or signed token) | Print, Download PDF |
+| `/track-order` | ⚠️ | P1 | See 17.1 | — |
+| `/order/[token]` | ❌ | P1 | Guest order access without exposing order-number-only lookup | — |
+
+### 17.4 Vendor dashboard pages
+
+| Route | Status | Priority | The page must contain | Primary actions |
+| :--- | :--- | :--- | :--- | :--- |
+| `/vendor` | ⚠️ | P1 | KPIs (revenue, orders, AOV, low stock), sales chart, date range, recent orders, alerts | Change Range, Open Order |
+| `/vendor/orders` | ⚠️ | P1 | List, status filter, date filter, customer search, pagination, bulk select, export | Filter, Search, Export, Bulk Update |
+| `/vendor/orders/[orderNumber]` | ❌ | P1 | Full order, timeline, customer, payment, items, invoice, packing slip, tracking, notes | Update Status, Print, Refund, Cancel, Notify |
+| `/vendor/products` | ⚠️ | P1 | List, search, filter, pagination, stock, price, image, status, add/edit | Add, Edit, Archive, Bulk Update |
+| `/vendor/products/new` | ⚠️ | P1 | Full product form (inline panel exists) — images, variants, SEO, dimensions, HSN | Save Draft, Publish |
+| `/vendor/products/[id]/edit` | ⚠️ | P1 | Edit modal exists — needs images, variants, SEO, dimensions | Save |
+| `/vendor/categories` | ❌ | P1 | Category tree, create/edit/delete/reorder, image | Add, Edit, Delete, Reorder |
+| `/vendor/inventory` | ❌ | P2 | Stock by SKU, low-stock filter, adjustments, history | Adjust, Export |
+| `/vendor/customers` | ❌ | P2 | Customer list, orders, spend, last order | View, Export |
+| `/vendor/customers/[id]` | ❌ | P2 | Customer detail and order history | View Order |
+| `/vendor/analytics` | ❌ | P2 | Revenue, orders, AOV, repeat rate, top products, funnel, traffic | Date Range |
+| `/vendor/shipping` | ❌ | P1 | Origin pincode, rate slabs, free-shipping rule, serviceable pincodes, packaging buffer | Save |
+| `/vendor/coupons` | ❌ | P2 | Coupon list, create/edit, usage | Create, Disable |
+| `/vendor/reviews` | ❌ | P2 | Reviews for vendor products, reply | Approve/Reply (if allowed) |
+| `/vendor/settings` | ❌ | P2 | Store details, policies, notification prefs | Save |
+
+### 17.5 Super admin console pages
+
+| Route | Status | Priority | The page must contain | Primary actions |
+| :--- | :--- | :--- | :--- | :--- |
+| `/admin` | ⚠️ | P1 | Overview KPIs, revenue chart, recent orders, alerts, shortcuts | Date Range, Open |
+| `/admin/analytics` | ❌ | P1 | Revenue, orders, AOV, refunds, failed payments, top products, customers, traffic, funnel | Date Range, Export |
+| `/admin/orders` | ❌ | P1 | All orders, filters, search, pagination, export | View, Update, Export |
+| `/admin/orders/[id]` | ❌ | P1 | Full order, raw payment payload, timeline, notes, override | Force Status, Refund, Replay |
+| `/admin/payments` | ❌ | P0 | **Direct UPI verification queue** — UTR, amount, screenshot, age, approve/reject | Approve, Reject, Match |
+| `/admin/products` | ❌ | P1 | All products, search, filter, bulk actions | Edit, Archive, Feature |
+| `/admin/products/new` | ❌ | P1 | Full product create | Save |
+| `/admin/products/[id]/edit` | ❌ | P1 | Full product edit | Save |
+| `/admin/categories` | ❌ | P1 | Category CRUD and ordering | Add, Edit, Delete |
+| `/admin/customers` | ❌ | P1 | Customer list, spend, orders, last active | View, Export |
+| `/admin/customers/[id]` | ❌ | P1 | Profile, addresses, orders, reviews, notes | Suspend, View Order |
+| `/admin/users` | ⚠️ | P1 | Currently combined into `/admin`; needs search, filters, pagination | Role, Suspend, Reset |
+| `/admin/reviews` | ❌ | P1 | Moderation queue, approve/reject, photos | Approve, Reject |
+| `/admin/coupons` | ❌ | P1 | Coupon CRUD, usage, limits | Create, Disable |
+| `/admin/shipping` | ❌ | P1 | Rate card editor, origin, serviceability, free-shipping | Save |
+| `/admin/content` | ❌ | P2 | Banners, homepage sections, About/FAQ/policies, Instagram/UGC | Edit, Publish |
+| `/admin/messages` | ❌ | P2 | Contact form inbox, status, reply | Reply, Close |
+| `/admin/newsletter` | ❌ | P2 | Subscribers, export, campaigns | Export |
+| `/admin/settings` | ❌ | P1 | Store details, payment mode, feature flags, maintenance mode | Save |
+| `/admin/webhooks` | ❌ | P1 | Event log, payload, retry/replay | Replay |
+| `/admin/audit` | ⚠️ | P1 | Filters, pagination, export | Filter, Export |
+| `/admin/overrides` | ❌ | P2 | Direct DB tools — build last, heavily audited, confirmation required | Run (audited) |
+
+### 17.6 System, SEO and utility pages
+
+| Route / file | Status | Priority | Purpose |
+| :--- | :--- | :--- | :--- |
+| `src/app/not-found.tsx` | ❌ | P1 | Branded 404 with search + popular links |
+| `src/app/error.tsx` | ❌ | P1 | Branded error with retry |
+| `src/app/global-error.tsx` | ❌ | P1 | Root error boundary |
+| `src/app/loading.tsx` + route-level `loading.tsx` | ❌ | P2 | Skeletons, no layout shift |
+| `/offline` | ❌ | P2 | PWA offline fallback |
+| `/maintenance` | ❌ | P2 | Maintenance-mode landing |
+| `/sitemap.xml` (`src/app/sitemap.ts`) | ❌ | P1 | Products, categories, collections, static pages |
+| `/robots.txt` (`src/app/robots.ts`) | ❌ | P1 | Allow public, disallow account/admin/vendor/api |
+| `/manifest.webmanifest` (`src/app/manifest.ts`) | ❌ | P2 | PWA manifest + icons |
+| `/feed.xml` | ❌ | P2 | Product/blog feed |
+| `/opengraph-image` (dynamic) | ❌ | P2 | Social share images |
+| `/unsubscribe` | ❌ | P1 | Newsletter unsubscribe with signed token |
+| `/verify-email` | ❌ | P1 | See 17.2 |
+
+---
+
+## 18. Buttons, Forms and UI Controls Inventory
+
+> "Button exists" is not enough. Each control needs: loading state, disabled state, error message, success feedback, mobile tap target, keyboard access, and an audit-safe server action.
+
+### 18.1 Global shell (header, footer, overlays)
+
+| Control | Location | Expected behaviour | Status |
+| :--- | :--- | :--- | :--- |
+| Announcement bar | Header | Text from CMS, optional link, dismissible, remembered | ⚠️ static text |
+| Logo | Header / Footer | Go to `/` | ✅ |
+| Desktop category links | Header | Load category from DB, not hardcoded array | ⚠️ hardcoded |
+| Mobile menu button | Header | Open/close drawer, ARIA expanded, focus trap, Escape closes | ✅ |
+| Mobile search icon | Header | Open real search overlay, not just `/catalog` | ⚠️ links to catalog |
+| Global search input | Header | Query, debounce, suggestions, recent searches, Enter → `/search?q=` | ❌ |
+| Account icon | Header | `/login` when logged out; `/account` + menu when logged in | ⚠️ always `/login` |
+| Cart button + badge | Header | Open drawer, live count capped at `9+` | ✅ |
+| Cart drawer close / backdrop | Drawer | Close, restore scroll, focus return | ✅ |
+| Cart drawer qty − / + | Drawer | Update, disable at 1 / stock limit | ✅ |
+| Cart drawer remove | Drawer | Remove item, optional undo toast | ⚠️ no undo |
+| Cart drawer "View Full Cart" | Drawer | Go to `/cart` | ✅ |
+| Cart drawer "Proceed to Checkout" | Drawer | Go to `/checkout` after stock re-check | ⚠️ no re-check |
+| Cart drawer empty "Start Shopping" | Drawer | Go to `/catalog` | ✅ |
+| Footer links | Footer | Add About, Contact, FAQ, all policies, account, track | ⚠️ missing legal links |
+| Footer newsletter form | Footer | Email validation, consent, double opt-in, success state | ❌ |
+| Social icons | Footer | Instagram, WhatsApp, email | ⚠️ Instagram only |
+| Payment / trust icons | Footer | UPI, cards, secure checkout, GST invoice | ❌ |
+| Cookie consent banner | Global | Accept / reject / preferences, persisted, blocks non-essential tags | ❌ |
+| Toast system | Global | Add-to-cart, copy, save, errors; auto-dismiss, ARIA live | ❌ |
+| WhatsApp float button | Global | Open WhatsApp with prefilled message | ❌ |
+| Back-to-top button | Global | Appears after scroll, smooth scroll | ❌ |
+| Mobile bottom nav | Global | Home / Shop / Cart / Account | ❌ |
+| Skip-to-content link | Global | Keyboard users skip header | ❌ |
+
+### 18.2 Home page controls
+
+| Control | Expected behaviour | Status |
+| :--- | :--- | :--- |
+| Hero primary CTA | Go to catalog/collection | ⚠️ verify |
+| Hero secondary CTA | Go to best sellers/new arrivals | ❌ |
+| Hero carousel arrows/dots | Change slide, pause on hover, keyboard | ❌ |
+| Category tiles | Go to filtered catalog | ✅ |
+| Product card add-to-cart | Add, toast, badge update, disabled when sold out | ✅ |
+| Product card wishlist heart | Add/remove wishlist; login prompt if guest | ❌ |
+| Product card quick view | Modal with variants + add | ❌ |
+| "View all" links | Go to catalog/collection | ✅ |
+| Testimonials carousel | Customer quotes/photos, arrows | ❌ |
+| Instagram/UGC strip | Real feed or curated images, link to Instagram | ❌ |
+| Newsletter submit | Validate, consent, API, success/error | ❌ |
+
+### 18.3 Catalog and search controls
+
+| Control | Expected behaviour | Status |
+| :--- | :--- | :--- |
+| Search input | Query with debounce, URL state, clear button | ⚠️ basic |
+| Category pills | Multi-select or single-select filter, URL state | ✅ |
+| Sort dropdown | Newest, price low/high, popular, rating | ✅ |
+| In-stock toggle | Filter out `stockQuantity = 0` | ✅ |
+| Price range filter | Min/max with validation, URL state | ❌ |
+| Rating filter | 4★+, 3★+ | ❌ |
+| Tag filter | Collections/tags | ❌ |
+| Result count | "Showing X of Y" | ❌ |
+| Clear all filters | Reset URL and controls | ❌ |
+| Load more / pagination | Fetch next page, preserve scroll | ❌ |
+| Product card actions | Add, wishlist, quick view | ⚠️ add only |
+| No-results CTA | Suggest categories/popular products | ⚠️ |
+| Search suggestions | Autocomplete products + categories | ❌ |
+
+### 18.4 Product detail page controls
+
+| Control | Expected behaviour | Status |
+| :--- | :--- | :--- |
+| Thumbnail buttons | Change main image, keyboard accessible | ✅ |
+| Image zoom / lightbox | Click/tap to zoom, swipe on mobile | ❌ |
+| Variant buttons | Select variant, update price/stock/image, disable out-of-stock | ⚠️ no per-variant image/disable |
+| Quantity − / + | Min 1, max stock, disable at limits | ✅ |
+| Add to Bag (desktop) | Add variant + qty, toast, button success state | ✅ |
+| Add to Bag (mobile sticky) | Same as desktop | ✅ |
+| Buy Now | Add then go straight to checkout | ❌ |
+| Wishlist heart | Save/remove, login prompt | ❌ |
+| Notify me when back in stock | Email capture, API, confirmation | ❌ |
+| Share buttons | WhatsApp, Instagram, copy link, native share | ❌ |
+| Delivery estimator | Pincode → fee/ETA before checkout, use existing component | ⚠️ component unused |
+| Size guide / care modal | Open guide, close, focus trap | ❌ |
+| Review submit | Rating, title, body, photos; auth + purchase check | ⚠️ basic |
+| Review photo upload | Upload, preview, remove, size/type limits | ❌ |
+| Helpful / not helpful | One vote per user, optimistic update | ❌ |
+| Ask a question | Submit Q&A, moderation notice | ❌ |
+| Related product add-to-cart | Same as product card | ✅ |
+| Breadcrumbs | Home / Category / Product | ✅ |
+
+### 18.5 Cart page controls
+
+| Control | Expected behaviour | Status |
+| :--- | :--- | :--- |
+| Continue shopping | Go to catalog | ✅ |
+| Clear entire bag | Confirm dialog, then clear | ⚠️ no confirm |
+| Remove item | Remove, optional undo | ⚠️ no undo |
+| Qty − / + | Update, disable at limits, re-check stock | ✅ |
+| Coupon input + Apply | Validate, show discount, persist | ❌ |
+| Remove coupon | Recalculate totals | ❌ |
+| Save for later | Move item out of cart | ❌ |
+| Move to wishlist | Save and remove | ❌ |
+| Shipping estimate | Pincode input + fee/ETA | ❌ |
+| Proceed to Checkout | Validate stock, go to checkout | ⚠️ no stock re-check |
+| Cross-sell / frequently bought | Add recommended items | ❌ |
+| Empty-state CTA | Go to catalog | ✅ |
+
+### 18.6 Checkout controls
+
+| Control | Expected behaviour | Status |
+| :--- | :--- | :--- |
+| Guest / login choice | Guest allowed, login prefills data | ⚠️ implicit |
+| Full name / phone / email | Validate, autofill, error inline | ✅ |
+| Address line 1 / 2 | Required line 1, optional line 2 | ✅ |
+| City / state | Autofill from pincode, editable | ✅ |
+| Pincode + serviceability | 6-digit validation, fee + ETA, block unserviceable | ✅ |
+| Saved address picker | Logged-in users choose saved address | ❌ |
+| Save this address | Checkbox + address CRUD | ❌ |
+| Shipping method | Show calculated fee and ETA | ⚠️ fee only |
+| Coupon input + Apply | Validate server-side, show discount | ❌ |
+| Gift wrap toggle + message | Price rule, message saved to order | ❌ |
+| Order notes | Optional, length limit | ✅ |
+| Terms + privacy checkbox | Required, links open policy | ❌ |
+| GSTIN field | Optional for business buyers, validated | ❌ |
+| Copy UPI ID | Copy with feedback | ✅ |
+| UPI app deep links | GPay / PhonePe / Paytm with amount + VPA | ✅ |
+| QR code | Amount + VPA, fallback text | ✅ |
+| UTR input | 12-digit validation, uniqueness, required | ⚠️ stored but unverified |
+| Screenshot upload | Optional, size/type, private storage | ⚠️ public upload |
+| Place Order | Disable while submitting, server totals, idempotency | ⚠️ no idempotency |
+| Payment retry / change method | Retry failed/cancelled payment | ❌ |
+| Razorpay checkout | Only if client chooses automatic payments | ❌ not wired |
+| Edit cart link | Return to cart without losing data | ❌ |
+| Success page status | Real `paymentStatus`, not URL text | ❌ |
+
+### 18.7 Auth and account controls
+
+| Control | Expected behaviour | Status |
+| :--- | :--- | :--- |
+| Login submit | Loading, error, redirect param, rate limit | ✅ |
+| Show / hide password | Toggle with ARIA | ❌ |
+| Remember me | Longer session, opt-in | ❌ |
+| Forgot password link | Go to `/forgot-password` | ❌ |
+| Register link | Go to `/register` | ✅ |
+| Register submit | Validation, terms, verification email | ✅ |
+| Terms checkbox (register) | Required | ❌ |
+| Resend verification | Rate-limited, success state | ❌ |
+| Logout | Clear cookie, redirect, confirm | ⚠️ dashboards only |
+| Profile save | Validate, optimistic update, toast | ❌ |
+| Change password | Current + new + confirm, invalidate sessions | ❌ |
+| Address add / edit / delete | Modal/form, validation, default flag | ❌ |
+| Set default address | One default per user | ❌ |
+| Order invoice download | Auth/token protected PDF | ❌ |
+| Cancel order | Only before `SHIPPED`, reason | ❌ |
+| Return / exchange request | Reason, photos, policy window | ❌ |
+| Reorder | Re-add available items, warn on missing | ❌ |
+| Wishlist move to cart | Stock check | ❌ |
+| Delete account | Confirm, export offer, retention notice | ❌ |
+| Notification preferences | Email/WhatsApp toggles | ❌ |
+
+### 18.8 Vendor dashboard controls
+
+| Control | Expected behaviour | Status |
+| :--- | :--- | :--- |
+| Sidebar navigation | Overview, orders, products, categories, shipping, settings | ⚠️ 3 pages only |
+| Date range | Today / 7d / 30d / custom, refetch KPIs | ❌ |
+| Export CSV | Orders/products with filters | ❌ |
+| Order search / filters | Status, date, customer, order number | ⚠️ status only |
+| Order row open | Go to order detail | ❌ |
+| Status update | State-machine validated, audit logged | ⚠️ unrestricted |
+| Tracking number + courier | Save, show customer, build tracking URL | ⚠️ basic |
+| Print invoice | Print-friendly page/PDF | ❌ |
+| Print packing slip / label | Print-friendly | ❌ |
+| Refund | Razorpay/manual, reason, audit | ❌ |
+| Cancel + restock | Confirm, restock, audit | ❌ |
+| Internal notes | Private, timestamped | ❌ |
+| Add product | Create with validation | ✅ inline |
+| Edit product | Price, stock, image, weight, description | ✅ modal |
+| Archive / delete product | Soft delete, confirm | ❌ |
+| Multi-image upload / reorder / delete | Primary image selection | ❌ |
+| Variant CRUD | Title, price, stock, SKU, image | ❌ |
+| Category CRUD | Create/edit/delete/reorder | ❌ |
+| Stock − / + | Optimistic, audit, prevent negative | ✅ |
+| Bulk price / stock update | CSV or table | ❌ |
+| Low-stock threshold | Per product, alerts | ❌ |
+| Product search / filter | Query, category, status | ✅ |
+| Pagination | Server-side | ❌ |
+| Shipping rate editor | Read/write DB rules | ❌ |
+| Settings save | Store details, notifications | ❌ |
+
+### 18.9 Super admin controls
+
+| Control | Expected behaviour | Status |
+| :--- | :--- | :--- |
+| Logout | Clear session | ✅ |
+| Role selector | Change role, confirm, audit, protect last `SUPER_ADMIN` | ⚠️ no guard |
+| User search / filter | Name, email, role, status | ❌ |
+| Suspend / ban user | Reason, audit, block login | ❌ |
+| Force password reset | Email token, invalidate sessions | ❌ |
+| Impersonate user | Audited, banner, short expiry | ❌ |
+| Orders list / detail | Filters, pagination, raw payment payload | ❌ |
+| Force order status | Reason, audit, side effects | ❌ |
+| Refund | Gateway/manual, audit | ❌ |
+| Replay webhook | Idempotent, audit | ❌ |
+| **Verify / reject UPI payment** | Match UTR + amount, mark paid/rejected, audit | ❌ **P0** |
+| Analytics date range | Refetch charts/KPIs | ❌ |
+| Settings save | Payment mode, flags, maintenance | ❌ |
+| Feature flags | Toggle, audit | ❌ |
+| Banner / content upload | Image, placement, schedule | ❌ |
+| Category CRUD | Create/edit/delete/reorder | ❌ |
+| Coupon CRUD | Create/edit/disable, usage limits | ❌ |
+| Review approve / reject | Moderation queue | ❌ |
+| Contact inbox | Read/reply/close | ❌ |
+| Newsletter export | CSV | ❌ |
+| Audit filters / export | Action, user, date | ⚠️ basic list only |
+
+---
+
+## 19. Services, Integrations and Background Functions
+
+### 19.1 Internal services (the `src/lib` layer)
+
+| Service | Responsibility | Key functions to build / fix | Status |
+| :--- | :--- | :--- | :--- |
+| Auth / session | Issue, verify, refresh, revoke sessions | `getSession`, `requireRole`, cookie flags, session table | ⚠️ basic |
+| Password | Hash + verify | Argon2/bcrypt, strength policy | ✅ |
+| RBAC | Role + owner checks | `can(user, action, resource)`, route guards | ⚠️ route-level only |
+| Validation | Zod schemas for every mutation | Auth, checkout, product, coupon, address, review, settings | ⚠️ partial |
+| Rate limiting | Per-IP + per-user limits | Redis/Upstash, route-specific buckets | ⚠️ in-memory |
+| Cart | Add/update/remove, totals, stock re-check | Server cart for logged-in, merge guest cart on login | ⚠️ localStorage only |
+| Pricing | Server-side price authority | Recompute every line, coupon, shipping, rounding | ❌ |
+| Inventory | Reserve, decrement, restock, history | Conditional updates, reservations, `StockMovement` | ❌ |
+| Order numbering | Collision-free human number | DB sequence/nanoid + retry | ❌ |
+| Order state machine | Allowed transitions + side effects | Single `transitionOrder()` service | ❌ |
+| Payment — Razorpay | Create order, verify signature, refund | Webhook, idempotency, reconciliation | ⚠️ exists but unused in UI |
+| Payment — Direct UPI | Collect UTR/proof, verify, reconcile | UTR uniqueness, admin queue, bank CSV match | ❌ |
+| Payment ledger | Every attempt and event | `Payment`, `WebhookEvent`, `Refund` | ⚠️ basic |
+| Shipping | Zone, weight slabs, ETA | Read DB rules, origin config, serviceability | ⚠️ hardcoded |
+| Tax / invoice | GST, HSN, invoice number | Tax-inclusive decision, PDF, credit notes | ❌ |
+| Coupons | Validate, reserve usage, redeem | Per-user limit, expiry, stacking rules | ❌ |
+| Wishlist | Add/remove/list, merge guest | Auth required or local | ❌ |
+| Reviews | Create, moderate, verify purchase | Photos, helpful votes, one per product | ⚠️ basic |
+| Q&A | Ask, answer, moderate | Product questions | ❌ |
+| Returns / refunds | Request, approve, receive, refund | State machine, restock, gateway refund | ❌ |
+| Email | Transactional templates | Queue, retry, log, unsubscribe | ❌ |
+| WhatsApp | Order + shipping templates | Cloud API/Twilio, opt-in | ❌ |
+| SMS | Optional fallback | Provider + cost control | ❌ |
+| Media upload | Validate, store, transform, delete | Private proofs, Cloudinary/Supabase, cleanup | ⚠️ partial |
+| Search | Product search + suggestions | Postgres trigram or Meilisearch | ⚠️ basic SQL |
+| Settings | Store config + feature flags | `Setting` table, cached | ❌ |
+| Audit | Log every privileged mutation | Actor, action, resource, before/after, IP | ⚠️ partial |
+| Analytics | Events + business metrics | GA4, internal events, dashboards | ❌ |
+| SEO | Metadata, JSON-LD, sitemap, robots | Server components, canonical, OG | ❌ |
+| Monitoring | Errors, uptime, alerts | Sentry, uptime checks, structured logs | ❌ |
+| Webhooks (in) | Receive, verify, store, replay | Razorpay/courier, idempotent | ⚠️ Razorpay only |
+| Webhooks (out) | Notify external systems | Optional | ❌ |
+
+### 19.2 Third-party integrations
+
+| Integration | Purpose | Env keys | Status |
+| :--- | :--- | :--- | :--- |
+| Razorpay | Cards/UPI/netbanking, refunds, webhooks | `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET` | ⚠️ code exists, UI unused |
+| Store UPI VPA | Direct UPI collection | `UPI_VPA`, `UPI_PAYEE_NAME` | ⚠️ hardcoded/verify |
+| Resend (or SendGrid/Postmark) | Transactional email | `RESEND_API_KEY`, `EMAIL_FROM` | ❌ |
+| WhatsApp Cloud API / Twilio | Order updates, OTP optional | `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_ID`, `WHATSAPP_VERIFY_TOKEN` | ❌ |
+| Shiprocket / Delhivery / direct courier | AWB, pickup, tracking webhook | Courier API keys | ❌ |
+| Cloudinary | Product image upload/transform | `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` | ⚠️ hardcoded fallback |
+| Supabase Storage / Firebase Storage | Backups / private payment proofs | `SUPABASE_URL`, `SUPABASE_ANON_KEY`, Firebase config | ⚠️ hardcoded fallback |
+| PostgreSQL (Supabase/Neon) | Primary database | `DATABASE_URL`, `DIRECT_URL` | ✅ |
+| Upstash Redis | Distributed rate limit + cache | `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | ❌ |
+| GA4 / GTM | Traffic + conversion analytics | `NEXT_PUBLIC_GA_ID`, `NEXT_PUBLIC_GTM_ID` | ❌ |
+| Meta Pixel / Conversions API | Instagram/Facebook ads | `NEXT_PUBLIC_META_PIXEL_ID`, `META_CAPI_TOKEN` | ❌ |
+| Sentry | Error monitoring | `SENTRY_DSN`, `SENTRY_AUTH_TOKEN` | ❌ |
+| Google Search Console | Indexing + sitemap | Verification token | ❌ |
+| Instagram | Feed/UGC embed, DM link | Optional token | ❌ |
+| Google Merchant Center | Product feed | Feed URL / API | ❌ |
+| GST/e-invoice (optional) | B2B invoices | GST portal / provider | ❌ |
+| Domain + SSL + DNS | Production hosting | Registrar/host | ❌ |
+
+### 19.3 Scheduled jobs / cron
+
+| Job | Schedule | What it does |
+| :--- | :--- | :--- |
+| Expire unpaid orders | Every 15 min | Cancel `PENDING_PAYMENT` older than 24h, release reservations |
+| Expire inventory reservations | Every 5 min | Release stock reserved by abandoned checkouts |
+| Abandoned cart | Hourly | Email/WhatsApp after 1h / 24h, respect opt-out |
+| Low-stock alert | Daily + on change | Notify vendor/admin below threshold |
+| Daily sales summary | 9 PM IST | Revenue, orders, AOV, failed payments, low stock |
+| Webhook retry | Every 10 min | Retry failed/unprocessed `WebhookEvent` |
+| Email retry | Every 10 min | Retry `EmailLog` failures with backoff |
+| Refund reconciliation | Daily | Match gateway refunds to `Refund` rows |
+| UPI statement import | Daily | Import bank CSV, auto-match UTRs |
+| Review request | 3 days after delivery | Email/WhatsApp review link |
+| Sitemap refresh | Daily | Regenerate product/category sitemap |
+| Token/session cleanup | Daily | Delete expired sessions, verification tokens |
+| Payment proof cleanup | Monthly | Delete proofs past retention window |
+| Backup verification | Weekly | Confirm DB backup restore works |
+
+### 19.4 Environment variables (complete inventory)
+
+| Group | Variables |
+| :--- | :--- |
+| App | `NEXT_PUBLIC_APP_URL`, `NODE_ENV`, `PORT` |
+| Database | `DATABASE_URL`, `DIRECT_URL` |
+| Auth | `NEXTAUTH_SECRET` / `JWT_SECRET` (32+ chars), `SESSION_TTL`, `COOKIE_DOMAIN` |
+| Payments | `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, `NEXT_PUBLIC_RAZORPAY_KEY_ID`, `UPI_VPA`, `UPI_PAYEE_NAME` |
+| Email | `RESEND_API_KEY`, `EMAIL_FROM`, `EMAIL_REPLY_TO` |
+| WhatsApp | `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_ID`, `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_SUPPORT_NUMBER` |
+| Storage | `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` |
+| Cache / limits | `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` |
+| Analytics | `NEXT_PUBLIC_GA_ID`, `NEXT_PUBLIC_GTM_ID`, `NEXT_PUBLIC_META_PIXEL_ID`, `META_CAPI_TOKEN` |
+| Monitoring | `SENTRY_DSN`, `SENTRY_AUTH_TOKEN`, `LOG_LEVEL` |
+| Ops | `CRON_SECRET`, `ADMIN_ALERT_EMAIL`, `FEATURE_FLAGS`, `MAINTENANCE_MODE` |
+| Dev only | `ENABLE_MOCK_MODE` (must be ignored in production) |
+
+> Rule: every variable above must appear in `.env.example` (with a dummy value), be validated at boot with Zod, and never be committed with a real value.
+
+### 19.5 Webhook events to handle
+
+| Source | Events |
+| :--- | :--- |
+| Razorpay | `payment.authorized`, `payment.captured`, `payment.failed`, `order.paid`, `refund.created`, `refund.processed`, `refund.failed` |
+| Courier | `shipment.created`, `shipment.picked_up`, `shipment.in_transit`, `shipment.out_for_delivery`, `shipment.delivered`, `shipment.exception`, `shipment.rto` |
+| WhatsApp | `messages` status (sent/delivered/read/failed) |
+| Email | Delivered, bounced, complained (provider webhook) |
+| Internal | `order.paid`, `order.shipped`, `order.delivered`, `order.cancelled`, `refund.processed`, `stock.low` |
+
+---
+
+## 20. Business Functions and Rules (the logic layer)
+
+### 20.1 Order status state machine
+
+| From | To | Who can do it | Condition | Side effects |
+| :--- | :--- | :--- | :--- | :--- |
+| — | `PENDING_PAYMENT` | Customer | Valid cart, address, stock, totals | Create order + payment; **do not** decrement stock |
+| `PENDING_PAYMENT` | `PAID` | System / admin | Payment webhook verified **or** UTR matched | Decrement stock atomically, payment `SUCCESS`, audit, email |
+| `PENDING_PAYMENT` | `CANCELLED` | Customer / admin / cron | Not paid or expired | No stock change, email |
+| `PAID` | `PROCESSING` | Vendor / admin | Payment confirmed | Email "preparing" |
+| `PROCESSING` | `PACKED` | Vendor / admin | Items packed | Email optional |
+| `PACKED` | `SHIPPED` | Vendor / admin | Courier + AWB saved | Create shipment, tracking email/WhatsApp |
+| `SHIPPED` | `DELIVERED` | Vendor / admin / courier webhook | Courier confirms | `deliveredAt`, review request |
+| `PAID` / `PROCESSING` / `PACKED` | `CANCELLED` | Admin / vendor | Before `SHIPPED` | Restock, refund if paid, audit |
+| `DELIVERED` | Return requested | Customer | Within return window | Create `ReturnRequest` |
+| Return requested | Approved / rejected | Admin | Policy check | Email |
+| Approved | Received | Vendor | Item received | Inspect |
+| Received | `REFUNDED` | Admin | Refund processed | Restock, gateway refund, audit |
+| `PAID` | `REFUNDED` | Admin | Full refund | Restock, refund, audit |
+
+> Do **not** add return states to `OrderStatus` directly. Keep `ReturnRequest.status` separate so the order lifecycle stays clean. Add `RETURN_REQUESTED` only if reporting needs it.
+
+### 20.2 Payment status rules
+
+| Status | Meaning | Allowed next |
+| :--- | :--- | :--- |
+| `PENDING` | No payment attempt confirmed | `PENDING_VERIFICATION`, `SUCCESS`, `FAILED` |
+| `PENDING_VERIFICATION` | UTR/proof submitted, waiting for match | `SUCCESS`, `FAILED` |
+| `SUCCESS` | Money confirmed | `REFUNDED` |
+| `FAILED` | Attempt failed / rejected | `PENDING` (retry) |
+| `REFUNDED` | Money returned | — |
+
+Rules:
+- A payment row is 1:1 with an order for this store. If partial payments are ever needed, change the model first.
+- `SUCCESS` requires gateway signature **or** an audited admin match — never a client payload.
+- Every transition writes an audit row with actor, amount, and reference.
+
+### 20.3 Money and pricing rules
+
+```text
+unitPrice      = variant.price ?? product.price          // server-side only
+subtotal       = Σ (unitPrice × quantity)
+discount       = coupon.type == PERCENT
+                   ? min(subtotal × value / 100, maxDiscount)
+                   : min(value, subtotal)
+shipping       = rate(zone, totalWeightGrams)             // Section 20.4
+tax            = client decision: inclusive (shown on invoice) or exclusive (added)
+total          = subtotal − discount + shipping (+ tax if exclusive)
+amountPaise    = round(total × 100)
+```
+
+Rules:
+- Never accept `price`, `subtotal`, `shipping`, or `total` from the client.
+- Recompute everything inside the order transaction.
+- Use integer paise internally; format to ₹ only in the UI.
+- Round half-up to 2 decimals at the final total only.
+- Coupons apply after item validation and before shipping (unless the coupon says free shipping).
+- Shipping is calculated on **actual packed weight**, not on the client’s cart weight.
+
+### 20.4 Shipping rules (current rate card)
+
+| Zone | ≤500g | ≤1000g | ≤1500g | ≤2000g | Each extra 500g |
+| :--- | ---: | ---: | ---: | ---: | ---: |
+| LOCAL (origin prefix 40) | ₹34 | ₹56 | ₹70 | ₹103 | +₹25 |
+| WITHIN_STATE (Maharashtra) | ₹77 | ₹107 | ₹139 | ₹188 | +₹40 |
+| ZONE_METRO (metro pincodes) | ₹82 | ₹126 | ₹168 | ₹234 | +₹50 |
+| OTHER_STATE | ₹84 | ₹134 | ₹201 | ₹283 | +₹60 |
+
+Rules:
+- Minimum billable weight 50g.
+- Origin is currently hardcoded to Maharashtra / Mumbai (prefix `40`); move to settings.
+- Zone resolution: local prefix → same state → metro prefix → other state.
+- Add packaging buffer (e.g. +20–50g) before charging.
+- Store the rate card in `ShippingRateRule`; the hardcoded matrix becomes the fallback only.
+- Free-shipping threshold must be a setting, not code.
+- Serviceable pincode list and exclusions are required before ads go live.
+
+### 20.5 Coupon rules
+
+- Types: `PERCENT` and `FIXED` (add `FREE_SHIPPING` if needed).
+- Conditions: min order value, max discount, start/end date, total usage limit, per-user limit, first-order-only, category/product restriction.
+- Validate on the server at apply time **and** again inside the order transaction (usage can change).
+- One coupon per order unless stacking is explicitly enabled.
+- Record a `CouponRedemption` row with order, user/email, and amount.
+- Never let a coupon make the total negative; clamp at ₹0.
+- Show clear errors: invalid, expired, minimum not met, already used, not applicable.
+
+### 20.6 Tax, GST and invoice rules
+
+- Decide whether displayed prices include GST; write it in the policies and invoice.
+- Store `hsnCode`, `taxRate`, `taxAmount`, and `invoiceNumber` per order/item.
+- Invoice number must be sequential and separate from `orderNumber`.
+- B2B buyers: collect GSTIN, validate format, show it on the invoice.
+- Credit notes for refunds; never edit a issued invoice.
+- Keep invoices immutable; store a PDF snapshot or regenerate from the snapshot.
+
+### 20.7 Inventory rules
+
+- Decrement only after payment confirmation, in the same transaction as the order status change.
+- Use conditional updates: `where: { id, stockQuantity: { gte: qty } }`; if `count === 0`, fail the whole transaction.
+- For Razorpay checkout windows, use `InventoryReservation` with expiry instead of decrementing immediately.
+- Restock exactly once on cancel/refund; make it idempotent.
+- Never allow negative stock; refuse the sale instead.
+- Write a `StockMovement` row for every change (order, cancel, restock, manual, correction).
+- Low-stock threshold per product; alert vendor and admin.
+- Variant stock is authoritative when a variant is selected.
+
+### 20.8 Returns, exchanges and refunds
+
+- Return window (e.g. 7 days from delivery) stored in settings.
+- Exclusions: used/opened hygiene items, earrings (if policy says so), custom/personalized items, sale items.
+- Customer must upload photos and choose a reason.
+- Admin approves/rejects with a note; customer is notified.
+- Refund to original payment method; if Direct UPI, collect/confirm the refund UPI ID.
+- Restock only after the item is received and inspected (unless the policy says otherwise).
+- Refund timeline must match the policy page (e.g. 5–7 business days).
+- Every step is audited.
+
+### 20.9 Authorization matrix (RBAC)
+
+| Action | Guest | Customer | Vendor | Super Admin |
+| :--- | :---: | :---: | :---: | :---: |
+| Browse catalog / product | ✅ | ✅ | ✅ | ✅ |
+| Add to cart / checkout as guest | ✅ | ✅ | ✅ | ✅ |
+| View own orders | ❌ | ✅ | ✅ (own) | ✅ (all) |
+| Manage own addresses/profile | ❌ | ✅ | ✅ | ✅ |
+| Write review | ❌ | ✅ (purchased) | ✅ | ✅ |
+| View `/vendor` | ❌ | ❌ | ✅ | ✅ |
+| Manage products/stock | ❌ | ❌ | ✅ | ✅ |
+| Update order status | ❌ | ❌ (cancel only) | ✅ (own) | ✅ |
+| Refund | ❌ | ❌ | ❌ | ✅ |
+| View `/admin` | ❌ | ❌ | ❌ | ✅ |
+| Change roles / settings | ❌ | ❌ | ❌ | ✅ |
+| Verify UPI payment | ❌ | ❌ | ❌ | ✅ |
+| Impersonate | ❌ | ❌ | ❌ | ✅ (audited) |
+
+Rules:
+- Check on the server, not only in the UI.
+- Vendors can only touch their own orders/products; return `403` otherwise.
+- Protect the last `SUPER_ADMIN` from demotion/deletion.
+- Admin override actions require a reason and write an audit row.
+
+### 20.10 Validation rules
+
+| Field | Rule |
+| :--- | :--- |
+| Email | Valid format, lowercase, max 254 chars, unique |
+| Phone (India) | 10 digits, starts 6–9, normalize `+91` |
+| Pincode | 6 digits, not starting 0, serviceability check |
+| Password | Min 8–10 chars, mix of letters/numbers, block common passwords |
+| Name | 2–80 chars, no control characters |
+| Address line | 5–200 chars, required line 1 |
+| Quantity | Integer, ≥1, ≤ stock, ≤ per-order limit |
+| UTR | 12 digits, unique per gateway, required for UPI |
+| GSTIN | 15 chars, valid checksum (if collected) |
+| Coupon code | Uppercase, 3–20 chars, alphanumeric |
+| Review | Rating 1–5, body 10–1000 chars, one per product per user |
+| Upload | JPEG/PNG/WebP/AVIF, max 5 MB, magic-byte check |
+| Notes | Max 500 chars, escaped on render |
+| Search query | Max 100 chars, trim, no SQL wildcards injected |
+
+### 20.11 Rate limits and fraud rules
+
+| Route | Limit |
+| :--- | :--- |
+| Login | 5 / 15 min per IP + per email |
+| Register | 3 / hour per IP |
+| Forgot password | 3 / hour per email |
+| Checkout create | 10 / hour per IP + per user |
+| Payment verify | 20 / hour per order |
+| Order lookup | 10 / hour per IP |
+| Review create | 5 / day per user |
+| Contact form | 3 / hour per IP |
+| Upload | 20 / hour per user |
+| Admin/vendor mutations | 100 / hour per user |
+
+Fraud rules:
+- Block checkout if the same UTR is reused.
+- Flag multiple orders from the same phone/address in a short window.
+- Flag mismatched billing/shipping names on high-value orders.
+- Never auto-approve UPI based on a screenshot.
+- Require prepaid only (current policy) — do not add COD without a separate risk process.
+
+---
+
+## 21. Complete Sitemap (navigation map)
+
+```text
+/
+├── catalog
+│   ├── ?category=keychains|hair-clips|stationery|bracelets|charms|wipes
+│   ├── ?sort=newest|price-asc|price-desc|rating|popular
+│   └── ?page=N
+├── search?q=
+├── collections
+│   └── [slug]
+├── category/[slug]                 (SEO landing pages)
+├── product/[slug]
+├── wishlist
+├── cart
+├── checkout
+│   ├── success
+│   └── failure
+├── track-order
+├── order/[token]                   (guest signed link)
+├── invoice/[orderNumber]
+├── about
+├── contact
+├── faq
+├── size-guide
+├── care-guide
+├── blog
+│   └── [slug]
+├── gift-cards
+├── reviews
+├── login
+├── register
+├── forgot-password
+├── reset-password
+├── verify-email
+├── account
+│   ├── orders
+│   │   └── [orderNumber]
+│   ├── addresses
+│   ├── profile
+│   ├── security
+│   ├── wishlist
+│   ├── returns
+│   ├── notifications
+│   └── delete
+├── vendor
+│   ├── orders
+│   │   └── [orderNumber]
+│   ├── products
+│   │   ├── new
+│   │   └── [id]/edit
+│   ├── categories
+│   ├── inventory
+│   ├── customers
+│   │   └── [id]
+│   ├── analytics
+│   ├── shipping
+│   ├── coupons
+│   ├── reviews
+│   └── settings
+├── admin
+│   ├── analytics
+│   ├── orders
+│   │   └── [id]
+│   ├── payments                 (UPI verification queue — P0)
+│   ├── products
+│   │   ├── new
+│   │   └── [id]/edit
+│   ├── categories
+│   ├── customers
+│   │   └── [id]
+│   ├── users
+│   ├── reviews
+│   ├── coupons
+│   ├── shipping
+│   ├── content
+│   ├── messages
+│   ├── newsletter
+│   ├── settings
+│   ├── webhooks
+│   ├── audit
+│   └── overrides                (last, audited)
+├── privacy-policy
+├── terms-and-conditions
+├── shipping-policy
+├── return-refund-policy
+├── cookie-policy
+├── unsubscribe
+├── offline
+├── maintenance
+├── sitemap.xml
+├── robots.txt
+├── manifest.webmanifest
+├── feed.xml
+└── not-found / error
+```
+
+---
+
+## 22. Step-by-Step Execution Gates
+
+> Work in this order. Do not start a phase until the previous gate passes.
+
+| Phase | Build | Gate — do not proceed until |
+| :--- | :--- | :--- |
+| **0. Safety** | Remove mocks/fallbacks, atomic stock, payment binding, UTR verification queue, secrets, rate limits, error pages | A test order cannot become paid without money; stock cannot go negative; no secret is in git; `npm run build` passes |
+| **1. Customer account + trust** | Account pages, addresses, password reset, email verification, legal pages, invoices, cancel request, email notifications | Customer can register → verify → order → track → invoice → cancel; all policies exist; emails arrive |
+| **2. Admin / vendor completeness** | Order detail, UTR queue, product images/variants, categories, shipping editor, analytics, settings, refunds/returns | Vendor can fulfill an order end-to-end; admin can verify UPI, refund, and see real analytics |
+| **3. Conversion** | Coupons, wishlist, search page, filters, pagination, reviews photos/verified, Buy Now, saved addresses, gift wrap, delivery estimator, recently viewed | A guest can find → filter → wishlist → coupon → buy; every button in Section 18 has a working action |
+| **4. SEO / marketing / hardening** | SSR + metadata + JSON-LD, sitemap/robots/manifest, GA4 + Pixel + consent, newsletter/contact, PWA, a11y, E2E + CI, Sentry + uptime | Lighthouse 90+ mobile, E2E green, monitoring live, launch checklist in Section 14 complete |
+
+### 22.1 Definition of Done for every page/feature
+
+- [ ] Server-side authorization on every mutation.
+- [ ] Loading, empty, error, and success states.
+- [ ] Mobile 360px + tablet + desktop verified.
+- [ ] Keyboard accessible; focus visible; labels/ARIA correct.
+- [ ] No client-trusted money, stock, role, or status values.
+- [ ] API validation + friendly error messages.
+- [ ] Audit log for privileged actions.
+- [ ] Test coverage (unit for logic, integration for API, E2E for the flow).
+- [ ] SEO metadata where public.
+- [ ] Added to the sitemap/navigation where public.
+- [ ] Analytics event where it matters (view, add-to-cart, checkout, purchase).
+- [ ] Documented in this file and checked off.
+
+### 22.2 Suggested branch / commit discipline
+
+- `fix/launch-blockers` — Phase 0 only.
+- `feat/account` — Phase 1.
+- `feat/admin-vendor` — Phase 2.
+- `feat/conversion` — Phase 3.
+- `feat/seo-launch` — Phase 4.
+- One PR per feature; never mix payment/stock changes with UI polish.
 
 ---
 

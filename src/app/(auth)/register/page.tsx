@@ -6,6 +6,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Sparkles, Eye, EyeOff, AlertCircle, CheckCircle2, ArrowLeft } from "lucide-react";
+import { GoogleIcon } from "@/components/ui/icons";
+import { signInWithGoogle } from "@/lib/firebase/auth";
 
 function RegisterForm() {
   const router = useRouter();
@@ -18,6 +20,7 @@ function RegisterForm() {
   const [password, setPassword] = React.useState("");
   const [showPassword, setShowPassword] = React.useState(false);
   const [isLoading, setIsLoading] = React.useState(false);
+  const [isGoogleLoading, setIsGoogleLoading] = React.useState(false);
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
 
   // Dynamic password criteria validation
@@ -30,6 +33,36 @@ function RegisterForm() {
   };
 
   const isPasswordValid = Object.values(rules).every(Boolean);
+
+  const handleGoogleSignIn = async () => {
+    try {
+      setIsGoogleLoading(true);
+      setErrorMessage(null);
+
+      const googleUser = await signInWithGoogle();
+      const res = await fetch("/api/auth/google", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(googleUser),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setErrorMessage(data.error || "Failed to sign up with Google.");
+        return;
+      }
+
+      router.push(redirectPath);
+      router.refresh();
+    } catch (err: any) {
+      if (err.code !== "auth/popup-closed-by-user") {
+        console.error("Google registration error:", err);
+        setErrorMessage(err.message || "Google sign-up failed. Please try again.");
+      }
+    } finally {
+      setIsGoogleLoading(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -77,7 +110,7 @@ function RegisterForm() {
         <div className="inline-flex items-center justify-center h-12 w-12 rounded-full bg-rose-50 text-rose-900 mx-auto">
           <Sparkles className="h-6 w-6" />
         </div>
-        <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-neutral-900">
+        <h1 className="text-xl sm:text-2xl font-serif font-bold tracking-tight text-neutral-900">
           Create an Account
         </h1>
         <p className="text-xs sm:text-sm text-neutral-500">
@@ -89,12 +122,37 @@ function RegisterForm() {
       {errorMessage && (
         <div
           role="alert"
-          className="mb-5 flex items-start space-x-2 rounded-xl bg-red-50 p-3.5 text-xs sm:text-sm text-red-800 border border-red-200/80"
+          className="mb-5 flex items-start space-x-2 rounded-xl bg-red-50 p-3.5 text-xs sm:text-sm text-red-800 border border-red-200/80 animate-in fade-in"
         >
           <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0 text-red-600" />
           <p>{errorMessage}</p>
         </div>
       )}
+
+      {/* 1-Click Google Sign-In Button */}
+      <Button
+        type="button"
+        variant="outline"
+        onClick={handleGoogleSignIn}
+        disabled={isGoogleLoading || isLoading}
+        isLoading={isGoogleLoading}
+        className="w-full h-11 border-neutral-300 text-neutral-700 hover:bg-neutral-50 rounded-xl font-semibold text-xs sm:text-sm gap-2.5 shadow-sm transition-all"
+      >
+        <GoogleIcon className="h-4 w-4" />
+        {isGoogleLoading ? "Connecting to Google..." : "Sign up with Google"}
+      </Button>
+
+      {/* Divider */}
+      <div className="relative my-5">
+        <div className="absolute inset-0 flex items-center">
+          <div className="w-full border-t border-neutral-200" />
+        </div>
+        <div className="relative flex justify-center text-[11px] uppercase">
+          <span className="bg-white px-3 text-neutral-400 font-semibold tracking-wider">
+            Or create with email
+          </span>
+        </div>
+      </div>
 
       {/* Form */}
       <form onSubmit={handleSubmit} className="space-y-4">
@@ -165,17 +223,22 @@ function RegisterForm() {
                 <CheckCircle2 className="h-3 w-3 mr-1 inline" /> Lowercase letter
               </span>
               <span className={`flex items-center ${rules.number ? "text-emerald-700" : "text-neutral-400"}`}>
-                <CheckCircle2 className="h-3 w-3 mr-1 inline" /> Number (0-9)
+                <CheckCircle2 className="h-3 w-3 mr-1 inline" /> At least 1 number
               </span>
               <span className={`flex items-center col-span-2 ${rules.special ? "text-emerald-700" : "text-neutral-400"}`}>
-                <CheckCircle2 className="h-3 w-3 mr-1 inline" /> Special symbol (@$!%*?&#)
+                <CheckCircle2 className="h-3 w-3 mr-1 inline" /> Special character (@$!%*?&#)
               </span>
             </div>
           </div>
         )}
 
-        <Button type="submit" className="w-full mt-2" isLoading={isLoading}>
-          Create Account
+        <Button
+          type="submit"
+          className="w-full h-11 bg-rose-900 hover:bg-rose-950 text-white rounded-xl font-bold mt-2"
+          isLoading={isLoading}
+          disabled={!isPasswordValid || isGoogleLoading}
+        >
+          Create Account with Email
         </Button>
       </form>
 
@@ -184,7 +247,7 @@ function RegisterForm() {
         Already have an account?{" "}
         <Link
           href={`/login?redirect=${encodeURIComponent(redirectPath)}`}
-          className="font-semibold text-rose-900 hover:underline"
+          className="font-bold text-rose-900 hover:underline"
         >
           Sign In
         </Link>

@@ -6,6 +6,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Sparkles, Eye, EyeOff, AlertCircle, ArrowLeft } from "lucide-react";
+import { GoogleIcon } from "@/components/ui/icons";
+import { signInWithGoogle } from "@/lib/firebase/auth";
 
 function LoginForm() {
   const router = useRouter();
@@ -16,7 +18,44 @@ function LoginForm() {
   const [password, setPassword] = React.useState("");
   const [showPassword, setShowPassword] = React.useState(false);
   const [isLoading, setIsLoading] = React.useState(false);
+  const [isGoogleLoading, setIsGoogleLoading] = React.useState(false);
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
+
+  const handleGoogleSignIn = async () => {
+    try {
+      setIsGoogleLoading(true);
+      setErrorMessage(null);
+
+      const googleUser = await signInWithGoogle();
+      const res = await fetch("/api/auth/google", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(googleUser),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setErrorMessage(data.error || "Failed to sign in with Google.");
+        return;
+      }
+
+      if (data.user?.role === "SUPER_ADMIN") {
+        router.push(redirectPath.startsWith("/admin") ? redirectPath : "/admin");
+      } else if (data.user?.role === "VENDOR") {
+        router.push(redirectPath.startsWith("/vendor") ? redirectPath : "/vendor");
+      } else {
+        router.push(redirectPath);
+      }
+      router.refresh();
+    } catch (err: any) {
+      if (err.code !== "auth/popup-closed-by-user") {
+        console.error("Google login error:", err);
+        setErrorMessage(err.message || "Google sign-in was cancelled or failed. Please try again.");
+      }
+    } finally {
+      setIsGoogleLoading(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -70,11 +109,11 @@ function LoginForm() {
         <div className="inline-flex items-center justify-center h-12 w-12 rounded-full bg-rose-50 text-rose-900 mx-auto">
           <Sparkles className="h-6 w-6" />
         </div>
-        <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-neutral-900">
+        <h1 className="text-xl sm:text-2xl font-serif font-bold tracking-tight text-neutral-900">
           Welcome to The Bling Corner
         </h1>
         <p className="text-xs sm:text-sm text-neutral-500">
-          Sign in to manage orders, wishlists, and account settings
+          Sign in to manage your orders, bag, and account details
         </p>
       </div>
 
@@ -82,14 +121,39 @@ function LoginForm() {
       {errorMessage && (
         <div
           role="alert"
-          className="mb-5 flex items-start space-x-2 rounded-xl bg-red-50 p-3.5 text-xs sm:text-sm text-red-800 border border-red-200/80"
+          className="mb-5 flex items-start space-x-2 rounded-xl bg-red-50 p-3.5 text-xs sm:text-sm text-red-800 border border-red-200/80 animate-in fade-in"
         >
           <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0 text-red-600" />
           <p>{errorMessage}</p>
         </div>
       )}
 
-      {/* Form */}
+      {/* 1-Click Google Sign-In Button */}
+      <Button
+        type="button"
+        variant="outline"
+        onClick={handleGoogleSignIn}
+        disabled={isGoogleLoading || isLoading}
+        isLoading={isGoogleLoading}
+        className="w-full h-11 border-neutral-300 text-neutral-700 hover:bg-neutral-50 rounded-xl font-semibold text-xs sm:text-sm gap-2.5 shadow-sm transition-all"
+      >
+        <GoogleIcon className="h-4 w-4" />
+        {isGoogleLoading ? "Connecting to Google..." : "Continue with Google"}
+      </Button>
+
+      {/* Divider */}
+      <div className="relative my-5">
+        <div className="absolute inset-0 flex items-center">
+          <div className="w-full border-t border-neutral-200" />
+        </div>
+        <div className="relative flex justify-center text-[11px] uppercase">
+          <span className="bg-white px-3 text-neutral-400 font-semibold tracking-wider">
+            Or continue with email
+          </span>
+        </div>
+      </div>
+
+      {/* Email / Password Form */}
       <form onSubmit={handleSubmit} className="space-y-4">
         <Input
           id="email"
@@ -123,8 +187,13 @@ function LoginForm() {
           </button>
         </div>
 
-        <Button type="submit" className="w-full mt-2" isLoading={isLoading}>
-          Sign In
+        <Button
+          type="submit"
+          className="w-full h-11 bg-rose-900 hover:bg-rose-950 text-white rounded-xl font-bold mt-2"
+          isLoading={isLoading}
+          disabled={isGoogleLoading}
+        >
+          Sign In with Email
         </Button>
       </form>
 
@@ -133,7 +202,7 @@ function LoginForm() {
         Don&apos;t have an account?{" "}
         <Link
           href={`/register?redirect=${encodeURIComponent(redirectPath)}`}
-          className="font-semibold text-rose-900 hover:underline"
+          className="font-bold text-rose-900 hover:underline"
         >
           Create an Account
         </Link>
