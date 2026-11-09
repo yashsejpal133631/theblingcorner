@@ -333,9 +333,9 @@
 
 ### 2.1 Customer account area
 
-- [ ] `/account` dashboard (profile summary, recent orders, default address)
-- [ ] `/account/orders` — order history for logged-in customers
-- [ ] `/account/orders/[orderNumber]` — order detail with invoice download
+- [x] `/account` dashboard (profile summary, recent orders, default address)
+- [x] `/account/orders` — order history for logged-in customers
+- [x] `/account/orders/[orderNumber]` — order detail with invoice download (`/invoice/[orderNumber]`)
 - [ ] `/account/addresses` — add/edit/delete/default addresses
 - [ ] `/account/profile` — edit name, phone, email
 - [ ] `/account/security` — change password
@@ -343,12 +343,12 @@
 - [ ] Email verification after registration
 - [ ] Resend verification email
 - [ ] Delete account / data request (DPDP Act)
-- [ ] Link "My Account" in Navbar to `/account` when logged in, `/login` when not
-- [ ] Show user name + logout menu in Navbar (currently always shows `/login`)
+- [x] Link "My Account" in Navbar to `/account` when logged in, `/login` when not
+- [x] Show user name + logout menu in Navbar (with Google profile avatar)
 
 **APIs needed**
 
-- [ ] `GET /api/orders/user` — current user's orders
+- [x] `GET /api/account/orders` — current user's orders
 - [ ] `GET|POST|PATCH|DELETE /api/addresses`
 - [ ] `GET|PATCH /api/account`
 - [ ] `POST /api/account/password`
@@ -359,11 +359,11 @@
 
 ### 2.2 Cart & checkout
 
-- [ ] Coupon / discount code input (currently none)
-- [ ] Coupon validation API: `POST /api/coupons/validate`
-- [ ] Show discount in cart, checkout, order, invoice
+- [x] Coupon / discount code input (in checkout summary with instant validation)
+- [x] Coupon validation API: `POST /api/coupons/validate`
+- [x] Show discount in cart, checkout, order, invoice
 - [ ] Free-shipping threshold (optional business rule)
-- [ ] Save for later / move to wishlist
+- [x] Save for later / move to wishlist (with 1-click Move to Bag)
 - [ ] Cart stock re-validation on open and checkout
 - [ ] Cross-device cart (currently `localStorage` only)
 - [ ] Gift wrap option + gift message
@@ -388,7 +388,7 @@
 - [ ] Disable out-of-stock variants
 - [ ] Size guide / care instructions
 - [ ] "Notify me when back in stock" (email capture)
-- [ ] Wishlist / save for later button
+- [x] Wishlist / save for later button (heart toggle on cards + /wishlist page)
 - [ ] Share buttons (WhatsApp, Instagram, copy link)
 - [ ] Frequently bought together / upsell
 - [ ] Recently viewed products
@@ -406,52 +406,52 @@
 
 ### 2.4 Search & discovery
 
-- [ ] Dedicated `/search` page with query, filters, results count
-- [ ] Search suggestions / autocomplete
-- [ ] Search by category, price, availability, rating
-- [ ] Price range filter
-- [ ] Sort by popularity / rating / newest
+- [x] Dedicated `/search` page with query, filters, results count
+- [x] Search suggestions / autocomplete
+- [x] Search by category, price, availability, rating
+- [x] Price range filter
+- [x] Sort by popularity / rating / newest
 - [ ] Pagination or infinite scroll (currently missing)
-- [ ] "No results" suggestions / popular categories
+- [x] "No results" suggestions / popular categories
 - [ ] Search analytics (what people search and don't find)
 - [ ] Collections / curated drops (e.g. "New Arrivals", "Under ₹199", "Best Sellers")
 - [ ] Tags (e.g. `y2k`, `pastel`, `handmade`, `gift`)
 
 ### 2.5 Orders, tracking & after-sales
 
-- [ ] Invoice / receipt PDF download
+- [x] Invoice / receipt PDF download (`/invoice/[orderNumber]`)
 - [ ] Order confirmation page fetches real order data (currently only reads `orderNumber` from URL)
 - [ ] Email confirmation with invoice attached
 - [ ] WhatsApp order confirmation + dispatch notification
-- [ ] Track by `orderNumber + phone` (more private than order number only)
+- [x] Track by `orderNumber + phone` (more private than order number only)
 - [ ] Cancel order request (only before `SHIPPED`)
 - [ ] Return / exchange request
 - [ ] Refund status visible to customer
 - [ ] Reorder button
 - [ ] Delivery address change before dispatch (support flow)
-- [ ] Courier tracking link (not just AWB number)
+- [x] Courier tracking link (not just AWB number)
 - [ ] Order status timeline stored with timestamps (currently only current status)
-- [ ] Downloadable GST invoice (if registered)
+- [x] Downloadable GST invoice / receipt
 
 ### 2.6 Trust, content & legal pages
 
-- [ ] `/about`
-- [ ] `/contact` with form + WhatsApp + email + Instagram
-- [ ] `/faq`
-- [ ] `/shipping-policy`
-- [ ] `/return-refund-policy`
-- [ ] `/privacy-policy`
-- [ ] `/terms-and-conditions`
+- [x] `/about`
+- [x] `/contact` with form + WhatsApp + email + Instagram
+- [x] `/faq`
+- [x] `/shipping-policy`
+- [x] `/return-refund-policy`
+- [x] `/privacy-policy`
+- [x] `/terms-and-conditions`
 - [ ] `/cookie-policy`
 - [ ] Cookie consent banner (India DPDP + basic GDPR if international)
-- [ ] Business address, phone, email, GSTIN in footer
-- [ ] Grievance officer / support hours (India compliance)
+- [x] Business address, phone, email, GSTIN in footer
+- [x] Grievance officer / support hours (India compliance)
 - [ ] Testimonials / customer photos
-- [ ] Instagram feed or UGC gallery
+- [x] Instagram feed or UGC gallery link
 - [ ] Size/care guide page
 - [ ] Blog / journal (optional, good for SEO)
 - [ ] Newsletter signup + double opt-in
-- [ ] Contact form API + spam protection
+- [x] Contact form API + spam protection
 
 ### 2.7 UX / accessibility / PWA
 
@@ -2123,6 +2123,91 @@ Fraud rules:
 - `feat/conversion` — Phase 3.
 - `feat/seo-launch` — Phase 4.
 - One PR per feature; never mix payment/stock changes with UI polish.
+
+---
+
+## 23. P0 Implementation Status — `fix/launch-blockers`
+
+> Status snapshot after the Phase 0 safety pass. Section 1 above remains the
+> detailed issue catalogue; this section records what is actually fixed.
+
+### 23.1 Completed ✅
+
+- [x] **Fake/fallback data removed** from checkout, Razorpay verify/webhook,
+  order lookup/update, vendor orders/stats, products, categories, reviews, and
+  admin users/audit. These routes now fail closed with a `500`/`503` instead of
+  returning invented orders, products, revenue, or success responses.
+- [x] **Server-side pricing & totals** in `POST /api/checkout/create-order`.
+  Unknown/inactive products are rejected; `expectedTotal` mismatch returns
+  `409 TOTAL_CHANGED`; the client cannot set price or shipping.
+- [x] **Atomic stock reservation** at checkout via conditional
+  `updateMany({ stockQuantity: { gte: qty } })` inside the order transaction.
+  Reservation and restock are idempotent through `payload.stockReserved` /
+  `payload.stockRestored`.
+- [x] **Restock on cancel/reject** in both the order state machine and the UPI
+  rejection transaction.
+- [x] **Payment verification bound to the DB order** for Razorpay: signature,
+  gateway order id, one-order-per-payment-id, and amount/currency checks in the
+  webhook. Missing orders are errors, never simulated success.
+- [x] **Webhook hardening:** `RAZORPAY_WEBHOOK_SECRET` is mandatory, signatures
+  are length-checked before `timingSafeEqual`, events are idempotent, and every
+  validation/out-of-stock outcome is audited.
+- [x] **Idempotent order creation:** unique 12-digit UTR (`gatewayPaymentId`),
+  duplicate-submit returns the original order, and order numbers use
+  `TBC-YYYYMM-XXXXXX` with retry on unique collision.
+- [x] **Hardcoded credentials removed:** Cloudinary and Supabase now load from
+  env only; JWT secret fails closed in production; login has no default-account
+  bypass; Google sign-in verifies the Firebase ID token server-side; the seed
+  script refuses to create a default-password admin.
+- [x] **Order privacy:** `GET /api/orders/[orderNumber]` requires a signed
+  access token, the customer account, staff role, or the checkout phone/email.
+  PII is masked and only the UTR last four digits are returned.
+- [x] **Rate limiting + CSRF:** sensitive mutation routes use per-route limits
+  and an Origin/Referer same-origin check (`src/lib/http.ts`).
+- [x] **Upload hardening:** staff uploads max 5 MB, guest receipts max 8 MB,
+  MIME allow-list, Cloudinary configured from env.
+- [x] **Security headers + CSP** in `src/middleware.ts`, including Razorpay,
+  Firebase, Google Identity, Supabase, Cloudinary, and Google Fonts origins.
+- [x] **Branded error pages:** `src/app/not-found.tsx`, `src/app/error.tsx`,
+  `src/app/global-error.tsx`, and `public/placeholder.svg`.
+- [x] **Direct UPI verification queue:** `GET /api/admin/payments/pending`,
+  `POST /api/admin/payments/[id]/verify`, `POST /api/admin/payments/[id]/reject`
+  with audit logging, plus `/admin/payments` and `/vendor/payments` screens and
+  navigation links. Approve marks the order `PAID`; reject cancels and restocks.
+- [x] **Honest payment status:** checkout returns `PENDING_VERIFICATION`, the
+  success page fetches real status via the access token, and track-order shows
+  real payment state without exposing full PII.
+- [x] **Data accuracy:** product thumbnails mapped server-side, order-item
+  weight read from the product (no hardcoded 80g), review average is `0` with no
+  reviews, and the verified badge requires a delivered purchase.
+- [x] **Build/test gate:** `npm run build` passes (the WASM SWC fallback warning
+  is environmental), `npx tsc --noEmit` is clean, and `npx vitest run` passes
+  85/85 tests including the new P0 suite.
+
+### 23.2 Still open (P0/P1)
+
+- [ ] Move the in-memory rate limiter to Redis/KV for multi-instance serverless.
+- [ ] Add explicit request-body size caps for reviews, products, and checkout.
+- [ ] Store UPI receipts privately (signed URLs) instead of public Cloudinary.
+- [ ] Add unpaid-order expiry + cron to cancel and release reservations.
+- [ ] Add a `WebhookEvent` table (currently event ids are stored in
+  `Payment.payload`) and handle `payment.failed` / refund events.
+- [ ] Rotate any credentials that were previously committed to git history.
+- [ ] Customer payment status notifications (email/WhatsApp).
+- [ ] Schema follow-ups deferred from P0: `OrderItem.variantId`,
+  `OrderItem.variantTitle`, `OrderItem.weightGrams`, and variant-level stock
+  decrement. Checkout currently snapshots variant price/weight into the title
+  and totals but does not decrement variant stock.
+- [ ] Optional long-term shift to a gateway-hosted dynamic QR/webhooks to remove
+  manual UTR matching.
+
+### 23.3 Build verification
+
+| Check | Result |
+| :--- | :--- |
+| `npm run build` | ✅ compiles, all routes generated (`/admin/payments`, `/vendor/payments` included) |
+| `npx tsc --noEmit` | ✅ clean |
+| `npx vitest run` | ✅ 9 files, 85 tests passed |
 
 ---
 
